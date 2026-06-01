@@ -211,7 +211,6 @@ Create an issue in your GitHub repository with the `agent-ready` label. The poll
 
 | Setting               | Description                                              |
 |-----------------------|----------------------------------------------------------|
-| `temporalHost`        | Temporal frontend gRPC address (required, no default)   |
+| `temporalHost`        | Temporal frontend gRPC address; set in Helm values to point at your Temporal cluster |
 | `GITHUB_TOKEN`        | GitHub PAT with `repo` and `workflow` scopes             |
 | `DISCORD_TOKEN`       | Discord bot token for the approval channel               |
-| `temporalHost`        | Set in Helm values to point at your Temporal cluster     |

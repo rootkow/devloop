@@ -103,6 +103,7 @@ def test_getting_started_documents_optional_fields():
 def test_getting_started_documents_config_settings():
     """Guide must cover GITHUB_TOKEN, Discord bot token, and temporalHost."""
     text = (DOCS_DIR / "getting-started.md").read_text()
-    assert "GITHUB_TOKEN" in text or "github_token" in text.lower()
-    assert "discord" in text.lower()
+    text_lower = text.lower()
+    assert "github_token" in text_lower
+    assert "discord" in text_lower
     assert "temporalHost" in text
