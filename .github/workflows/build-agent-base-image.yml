@@ -89,8 +89,9 @@ jobs:
 
       - name: Report image size (gate at 4 GB)
         run: |
-          PRIMARY=$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | head -n1)
-          SIZE=$(docker image inspect "$PRIMARY" --format='{{.Size}}')
+          # Inspect by image ID, not tag: on pull_request builds the metadata
+          # tag rules are all gated to main/tags and produce no tag at all.
+          SIZE=$(docker image inspect "${{ steps.build.outputs.imageid }}" --format='{{.Size}}')
           python3 -c "
           size = $SIZE
           mb = size / 1048576
