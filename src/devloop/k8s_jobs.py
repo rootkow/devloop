@@ -1,0 +1,397 @@
+"""Kubernetes Job dispatch for Agent Execution Jobs (issue #18).
+
+A single Temporal activity, ``dispatch_agent_job``, renders a ``batch/v1`` Job
+from a Project Registry entry, creates it in the ``agents`` namespace, polls it
+to a terminal state, and reads the output ConfigMap the Job writes.
+
+Design notes
+------------
+* The kubernetes client is reached through ``_batch()`` / ``_core()`` so unit
+  tests can monkeypatch those without a cluster.
+* A failed Job (or a Job whose output ConfigMap reports ``failed``) raises an
+  exception so Temporal's retry policy (max 3) re-runs the activity. Each
+  attempt gets a fresh Job name (``…-a<attempt>``).
+* If the Job reports ``awaiting_human`` (a mid-run blocking question, issue
+  #21) the activity returns that result *without* deleting the Job — it stays
+  Running, polling its input ConfigMap for the answer. The workflow then calls
+  :func:`answer_agent_job` and :func:`await_agent_job`.
+* ``cleanup_agent_job`` deletes the Job and ConfigMap after a retention window.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import json
+import logging
+import os
+
+from temporalio import activity
+from temporalio.exceptions import ApplicationError
+
+from .shared import AgentJobResult, AnswerInput, AwaitInput, DispatchInput, JobStatus
+from .projects import get_project
+
+log = logging.getLogger(__name__)
+
+NAMESPACE = os.getenv("AGENTS_NAMESPACE", "agents")
+SERVICE_ACCOUNT = os.getenv("AGENT_JOB_SERVICE_ACCOUNT", "agent-job")
+TEMPORAL_HOST = os.getenv("TEMPORAL_HOST", "localhost:7233")
+OMNEVAL_OTLP_ENDPOINT = os.getenv(
+    "OMNEVAL_OTLP_ENDPOINT", "http://omneval-ingest.omneval.svc.cluster.local:8000"
+)
+OPENAI_BASE_URL = os.getenv("AGENT_OPENAI_BASE_URL", "http://192.168.68.104/v1")
+AGENT_BASE_IMAGE = os.getenv("AGENT_BASE_IMAGE", "ghcr.io/omneval/devloop-agent-base:latest")
+
+# Defaults; overridable via DispatchInput for tests.
+DEFAULT_CPU = os.getenv("AGENT_JOB_CPU", "2")
+DEFAULT_MEMORY = os.getenv("AGENT_JOB_MEMORY", "4Gi")
+JOB_ACTIVE_DEADLINE = int(os.getenv("AGENT_JOB_ACTIVE_DEADLINE", "7200"))
+
+
+# --------------------------------------------------------------------------- #
+# kubernetes client accessors (patched in tests)
+# --------------------------------------------------------------------------- #
+def _load_config() -> None:
+    from kubernetes import config
+
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+
+
+def _batch():
+    from kubernetes import client
+
+    _load_config()
+    return client.BatchV1Api()
+
+
+def _core():
+    from kubernetes import client
+
+    _load_config()
+    return client.CoreV1Api()
+
+
+# --------------------------------------------------------------------------- #
+# Job spec rendering
+# --------------------------------------------------------------------------- #
+def job_name_for(d: DispatchInput, attempt: int, discriminator: str = "") -> str:
+    """Build a Job name. Dev-loop jobs disambiguate by issue number; jobs with
+    no issue (Alert Response diagnosis) use ``discriminator`` (a per-workflow
+    hash) so two concurrent/rapid alerts don't collide on the same Job name and
+    read each other's stale output ConfigMap."""
+    spec = d.task_spec
+    base = f"agent-{spec.project_id}-{spec.phase}"
+    if d.issue_number:
+        base += f"-{d.issue_number}"
+    elif discriminator:
+        base += f"-{discriminator}"
+    return f"{base}-a{attempt}".replace("_", "-").lower()[:60]
+
+
+def _resolve_job_refs(d: DispatchInput):
+    """Resolve (image, omneval_secret, github_url, default_branch, github_token_secret).
+
+    Registry-backed jobs read from the project entry; alert-response style jobs
+    pass explicit overrides and have no registry project. ``github_token_secret``
+    may be empty for jobs that need no GitHub access (e.g. diagnosis).
+    """
+    try:
+        cfg = get_project(d.project_id)
+    except KeyError:
+        cfg = None
+    image = d.image_override or (cfg.agent_image if cfg else AGENT_BASE_IMAGE)
+    omneval_secret = d.omneval_secret_override or (cfg.omneval_ingest_secret if cfg else "")
+    github_url = d.github_url_override or (cfg.github_url if cfg else "")
+    default_branch = cfg.default_branch if cfg else "main"
+    github_token_secret = d.github_token_secret_override or (
+        cfg.github_token_secret if cfg else ""
+    )
+    if not omneval_secret:
+        raise ValueError(
+            f"no omneval ingest secret for project {d.project_id!r} "
+            "(set omneval_secret_override or add a registry entry)"
+        )
+    return image, omneval_secret, github_url, default_branch, github_token_secret
+
+
+def render_job(d: DispatchInput, job_name: str) -> dict:
+    """Render the ``batch/v1`` Job manifest for an Agent Execution Job."""
+    image, omneval_secret, github_url, default_branch, github_token_secret = (
+        _resolve_job_refs(d)
+    )
+    spec = d.task_spec
+
+    # omneval ingest is X-API-Key auth, NOT bearer; the omneval project is
+    # resolved server-side from the key, so no project_id is sent.
+    env = [
+        {"name": "TASK_SPEC", "value": json.dumps(dataclasses.asdict(spec))},
+        {"name": "PROJECT_ID", "value": d.project_id},
+        {"name": "GITHUB_URL", "value": github_url},
+        {"name": "DEFAULT_BRANCH", "value": default_branch},
+        {"name": "TEMPORAL_HOST", "value": TEMPORAL_HOST},
+        {"name": "OUTPUT_CONFIGMAP", "value": job_name},
+        {"name": "OPENAI_BASE_URL", "value": OPENAI_BASE_URL},
+        # OTLP / omneval tracing
+        {"name": "OTEL_EXPORTER_OTLP_PROTOCOL", "value": "http/protobuf"},
+        {
+            "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "value": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", OMNEVAL_OTLP_ENDPOINT),
+        },
+        {
+            "name": "OMNEVAL_API_KEY",
+            "valueFrom": {
+                "secretKeyRef": {"name": omneval_secret, "key": "api-key"}
+            },
+        },
+        {
+            "name": "OTEL_EXPORTER_OTLP_HEADERS",
+            # If the worker has an explicit override use it; otherwise default to
+            # omneval X-API-Key substitution referencing the secret env var.
+            "value": os.environ.get(
+                "OTEL_EXPORTER_OTLP_HEADERS", "x-api-key=$(OMNEVAL_API_KEY)"
+            ),
+        },
+        # OTEL_SERVICE_NAME is set to the phase so spans are tagged per-phase;
+        # the worker's own OTEL_SERVICE_NAME is intentionally NOT inherited here.
+        {"name": "OTEL_SERVICE_NAME", "value": spec.phase},
+    ]
+
+    # Pass through LLM connection env and stub flag from the worker process so
+    # the agent entrypoint can reach the DGX model endpoint and take the stub
+    # fast-path when AGENT_STUB=1.  Only include vars that are actually set —
+    # skip missing ones rather than forwarding empty strings.
+    for var in ("AGENT_MODEL", "AGENT_LLM_BASE_URL", "AGENT_LLM_API_KEY", "AGENT_STUB"):
+        val = os.environ.get(var)
+        if val:
+            env.append({"name": var, "value": val})
+
+    # Reviewer the merge phase tags on the PR it opens (assignee + @-mention).
+    # Sourced from the registry; absent for non-registry (alert-response) jobs.
+    try:
+        reviewer = get_project(d.project_id).pr_reviewer
+    except KeyError:
+        reviewer = ""
+    if reviewer:
+        env.append({"name": "PR_REVIEWER", "value": reviewer})
+
+    # Per-project GitHub token (scoped to that owner/org). Omitted for jobs that
+    # need no GitHub access, e.g. Alert Response diagnosis.
+    # ``GITHUB_TOKEN`` is used for git push/clone; ``GH_TOKEN`` is consumed by
+    # the ``gh`` CLI (``gh issue list``) inside the agent sandbox.
+    if github_token_secret:
+        env.extend([
+            {
+                "name": "GITHUB_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {"name": github_token_secret, "key": "GITHUB_TOKEN"}
+                },
+            },
+            {
+                "name": "GH_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {"name": github_token_secret, "key": "GITHUB_TOKEN"}
+                },
+            },
+        ])
+
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": job_name,
+            "namespace": NAMESPACE,
+            "labels": {
+                "app.kubernetes.io/managed-by": "orchestration-worker",
+                "agents.homelab/project": d.project_id,
+                "agents.homelab/phase": spec.phase,
+            },
+        },
+        "spec": {
+            "backoffLimit": 0,  # Temporal owns retries, not the Job controller
+            "activeDeadlineSeconds": JOB_ACTIVE_DEADLINE,
+            "ttlSecondsAfterFinished": int(d.retention_seconds),
+            "template": {
+                "metadata": {
+                    "labels": {"agents.homelab/project": d.project_id},
+                },
+                "spec": {
+                    "restartPolicy": "Never",
+                    "serviceAccountName": d.service_account_override or SERVICE_ACCOUNT,
+                    "containers": [
+                        {
+                            "name": "agent",
+                            "image": image,
+                            "command": ["python", "/usr/local/bin/agent-entrypoint.py"],
+                            "env": env,
+                            "resources": {
+                                "requests": {
+                                    "cpu": DEFAULT_CPU,
+                                    "memory": DEFAULT_MEMORY,
+                                },
+                                "limits": {"memory": DEFAULT_MEMORY},
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    }
+
+
+# --------------------------------------------------------------------------- #
+# ConfigMap read/write helpers
+# --------------------------------------------------------------------------- #
+def _read_output(core, job_name: str) -> dict | None:
+    """Return the parsed output ConfigMap payload, or None if not yet written."""
+    from kubernetes.client.exceptions import ApiException
+
+    try:
+        cm = core.read_namespaced_config_map(job_name, NAMESPACE)
+    except ApiException as exc:  # 404 = job hasn't written output yet
+        if getattr(exc, "status", None) == 404:
+            return None
+        raise
+    data = (cm.data or {}) if not isinstance(cm, dict) else cm.get("data", {})
+    raw = data.get("result")
+    if not raw:
+        return None
+    return json.loads(raw)
+
+
+def _result_from_payload(payload: dict, job_name: str) -> AgentJobResult:
+    return AgentJobResult(
+        status=payload.get("status", JobStatus.FAILED.value),
+        job_name=job_name,
+        issue_number=int(payload.get("issue_number", 0) or 0),
+        branch=payload.get("branch", ""),
+        pr_url=payload.get("pr_url", ""),
+        commits=int(payload.get("commits", 0) or 0),
+        tests_passed=bool(payload.get("tests_passed", False)),
+        question=payload.get("question", ""),
+        plan=payload.get("plan"),
+        review=payload.get("review"),
+        diagnosis=payload.get("diagnosis"),
+        summary=payload.get("summary", ""),
+        merged_issues=list(payload.get("merged_issues", []) or []),
+        merge_commit=payload.get("merge_commit", ""),
+        error=payload.get("error", ""),
+    )
+
+
+def _job_terminal(job) -> str | None:
+    """Return 'complete', 'failed', or None for a batch/v1 Job object/dict."""
+    status = job.status if not isinstance(job, dict) else job.get("status", {})
+    succeeded = getattr(status, "succeeded", None) if not isinstance(status, dict) else status.get("succeeded")
+    failed = getattr(status, "failed", None) if not isinstance(status, dict) else status.get("failed")
+    if succeeded:
+        return "complete"
+    if failed:
+        return "failed"
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Polling
+# --------------------------------------------------------------------------- #
+async def _poll_to_terminal(core, batch, job_name: str, d: DispatchInput) -> AgentJobResult:
+    """Poll a running Job until terminal or until it asks a human a question."""
+    while True:
+        payload = _read_output(core, job_name)
+        if payload and payload.get("status") == JobStatus.AWAITING_HUMAN.value:
+            log.info("job %s is awaiting a human reply", job_name)
+            return _result_from_payload(payload, job_name)
+
+        job = batch.read_namespaced_job_status(job_name, NAMESPACE)
+        terminal = _job_terminal(job)
+        if terminal == "complete":
+            payload = _read_output(core, job_name) or {"status": JobStatus.COMPLETE.value}
+            return _result_from_payload(payload, job_name)
+        if terminal == "failed":
+            payload = _read_output(core, job_name) or {}
+            err = payload.get("error", f"Job {job_name} failed without output")
+            raise ApplicationError(f"agent job failed: {err}", type="AgentJobFailed")
+
+        await asyncio.sleep(d.poll_interval_seconds)
+
+
+# --------------------------------------------------------------------------- #
+# Activities
+# --------------------------------------------------------------------------- #
+@activity.defn
+async def dispatch_agent_job(d: DispatchInput) -> AgentJobResult:
+    """Render + create an Agent Execution Job, then poll it to completion."""
+    attempt = activity.info().attempt
+    # Jobs without an issue number (Alert Response diagnosis) share a name across
+    # workflows; disambiguate by a hash of the workflow id so concurrent alerts
+    # get distinct Jobs/ConfigMaps. Stable across retries (same workflow run).
+    discriminator = ""
+    if not d.issue_number:
+        import hashlib
+
+        discriminator = hashlib.sha1(
+            activity.info().workflow_id.encode()
+        ).hexdigest()[:8]
+    job_name = job_name_for(d, attempt, discriminator)
+    manifest = render_job(d, job_name)
+
+    batch, core = _batch(), _core()
+
+    from kubernetes.client.exceptions import ApiException
+
+    try:
+        batch.create_namespaced_job(NAMESPACE, manifest)
+        log.info("created job %s (attempt %d)", job_name, attempt)
+    except ApiException as exc:
+        if getattr(exc, "status", None) != 409:  # already exists (retry attach)
+            raise
+        log.info("job %s already exists, attaching", job_name)
+
+    return await _poll_to_terminal(core, batch, job_name, d)
+
+
+@activity.defn
+async def answer_agent_job(inp: AnswerInput) -> None:
+    """Write a human's reply to the Job's input ConfigMap so it can resume."""
+    core = _core()
+    core.patch_namespaced_config_map(
+        inp.job_name,
+        NAMESPACE,
+        {"data": {"human_answer": inp.answer}},
+    )
+    log.info("answered job %s", inp.job_name)
+
+
+@activity.defn
+async def await_agent_job(inp: AwaitInput) -> AgentJobResult:
+    """Continue polling a Job that was previously parked on a human question."""
+    d = DispatchInput(
+        project_id=inp.project_id,
+        issue_number=inp.issue_number,
+        task_spec=inp.task_spec,
+        poll_interval_seconds=inp.poll_interval_seconds,
+    )
+    return await _poll_to_terminal(_core(), _batch(), inp.job_name, d)
+
+
+@activity.defn
+async def cleanup_agent_job(job_name: str) -> None:
+    """Delete the Job and its output ConfigMap (best-effort)."""
+    from kubernetes.client import V1DeleteOptions
+    from kubernetes.client.exceptions import ApiException
+
+    batch, core = _batch(), _core()
+    for fn in (
+        lambda: batch.delete_namespaced_job(
+            job_name, NAMESPACE, body=V1DeleteOptions(propagation_policy="Background")
+        ),
+        lambda: core.delete_namespaced_config_map(job_name, NAMESPACE),
+    ):
+        try:
+            fn()
+        except ApiException as exc:
+            if getattr(exc, "status", None) != 404:
+                log.warning("cleanup error for %s: %s", job_name, exc)
