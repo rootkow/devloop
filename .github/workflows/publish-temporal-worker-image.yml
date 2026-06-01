@@ -1,0 +1,84 @@
+name: Publish Temporal Worker Image
+
+# Builds and publishes ghcr.io/omneval/devloop-temporal-worker — the reference
+# Temporal Orchestration Worker that installs omneval-devloop and registers the
+# Dev Loop + Summarization workflows.
+#
+# Triggers:
+#   - workflow_run after the SDK "CI" workflow succeeds on main → rebuild against
+#     the freshest local SDK build, tagged sha-<short>-<epoch> + latest
+#   - push of a v* tag                                          → semver tags
+#   - pull_request                                              → build only (no push)
+#
+# The workflow_run dependency (acceptance #5) guarantees the image always
+# installs the freshest local SDK build: it only rebuilds once the SDK's tests
+# have passed on main.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  push:
+    tags: ['v*']
+  pull_request:
+
+concurrency:
+  group: publish-temporal-worker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build_and_push:
+    name: Build and push temporal-worker to GHCR
+    runs-on: ubuntu-latest
+    # Build on a successful SDK CI run on main, a v* tag, or any pull request.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+        with:
+          # For workflow_run, build the exact commit whose SDK CI just passed.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute sha-<short>-<epoch> tag
+        id: shatag
+        run: echo "value=sha-$(git rev-parse --short=7 HEAD)-$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/omneval/devloop-temporal-worker
+          tags: |
+            type=raw,value=${{ steps.shatag.outputs.value }},enable=${{ github.event_name == 'workflow_run' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_run' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push temporal-worker image
+        uses: docker/build-push-action@v6
+        with:
+          # Context is the repo root: the Dockerfile installs the SDK from source.
+          context: .
+          file: ./images/temporal-worker/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
