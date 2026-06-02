@@ -6,8 +6,8 @@ together, without a cluster:
 1. render_job propagates AGENT_STUB into the Job container env when set.
 2. The entrypoint stub path (AGENT_STUB=1) writes a valid output payload via
    OUTPUT_FILE that the worker can parse.
-3. _read_output / _result_from_payload returns a terminal AgentJobResult —
-   i.e. the workflow would advance.
+3. _read_output / AgentJobResult.from_payload returns a terminal AgentJobResult
+   — i.e. the workflow would advance.
 4. A fake-k8s dispatch_agent_job poll (using the FakeCore/FakeBatch pattern
    from test_k8s_jobs.py) completes with status="complete".
 """
@@ -194,13 +194,13 @@ def origin(tmp_path):
     return bare
 
 
-@pytest.mark.skip(reason="entrypoint.py migrates in issue #3 (devloop-agent-base)")
 def test_entrypoint_stub_produces_valid_output_payload(origin, tmp_path, monkeypatch):
-    """AGENT_STUB=1 entrypoint run writes a JSON payload parseable by _result_from_payload.
+    """AGENT_STUB=1 entrypoint run writes a JSON payload parseable by
+    AgentJobResult.from_payload.
 
     Git/clone/push/pr helpers run for real against the local bare repo; only
     open_draft_pr is stubbed (no gh auth needed).  The payload must have a
-    terminal status and all fields _result_from_payload consumes.
+    terminal status and all fields AgentJobResult.from_payload consumes.
     """
     entrypoint = _load_entrypoint()
 
@@ -238,20 +238,20 @@ def test_entrypoint_stub_produces_valid_output_payload(origin, tmp_path, monkeyp
         f"payload status must be terminal; got {payload.get('status')!r}"
     )
 
-    # Fields consumed by _result_from_payload
+    # Fields consumed by AgentJobResult.from_payload
     for field_name in ("status", "issue_number", "branch", "pr_url", "tests_passed"):
         assert field_name in payload, f"payload missing field: {field_name!r}"
 
 
 # --------------------------------------------------------------------------- #
-# Cycle 3 — _result_from_payload returns terminal AgentJobResult
+# Cycle 3 — AgentJobResult.from_payload returns terminal AgentJobResult
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.skip(reason="entrypoint.py migrates in issue #3 (devloop-agent-base)")
 def test_result_from_payload_returns_terminal_result(origin, tmp_path, monkeypatch):
-    """The payload produced by the stub path feeds through _result_from_payload
-    to yield a terminal AgentJobResult — the workflow advances."""
+    """The payload produced by the stub path feeds through
+    AgentJobResult.from_payload to yield a terminal AgentJobResult — the
+    workflow advances."""
     entrypoint = _load_entrypoint()
 
     workdir = tmp_path / "repo"
@@ -281,7 +281,7 @@ def test_result_from_payload_returns_terminal_result(origin, tmp_path, monkeypat
     payload = json.loads(out_file.read_text())
 
     # Feed through the worker's result parser — this is what dispatch_agent_job reads
-    result = k8s_jobs._result_from_payload(payload, "agent-omneval-execute-42-a1")
+    result = AgentJobResult.from_payload(payload, "agent-omneval-execute-42-a1")
 
     assert isinstance(result, AgentJobResult)
     assert result.status in {JobStatus.COMPLETE.value, JobStatus.FAILED.value}
@@ -320,3 +320,36 @@ async def test_dispatch_with_stub_payload_returns_complete(monkeypatch):
     assert result.pr_url == "pr://stub"
     assert result.issue_number == 42
     assert batch.created, "Job must have been created"
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 5 — the protocol owns its shape: round-trips are symmetric
+# --------------------------------------------------------------------------- #
+
+
+def test_agentjobresult_payload_round_trips():
+    """to_payload → from_payload reconstructs the result (job_name is assigned by
+    the reader, not carried on the wire)."""
+    r = AgentJobResult(
+        status=JobStatus.COMPLETE.value,
+        issue_number=42,
+        branch="agent/issue-42",
+        pr_url="pr://x",
+        commits=3,
+        tests_passed=True,
+        review={"summary": "ok", "inline_comments": []},
+        summary="done",
+    )
+    back = AgentJobResult.from_payload(r.to_payload(), "job-1")
+    assert "job_name" not in r.to_payload()
+    assert back == AgentJobResult(**{**r.__dict__, "job_name": "job-1"})
+
+
+def test_taskspec_env_round_trips():
+    spec = TaskSpec(
+        phase="merge",
+        project_id="omneval",
+        issue_number=7,
+        extra={"branches": ["agent/issue-7"]},
+    )
+    assert TaskSpec.from_env(spec.to_env_value()) == spec

@@ -7,7 +7,8 @@ standard library — no I/O, no threading, no network clients.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 
 # Task queues
@@ -18,6 +19,12 @@ DISCORD_QUEUE = "discord-bot"
 CHANNEL_APPROVALS = "approvals"
 CHANNEL_ALERTS = "alerts"
 CHANNEL_CHANGELOG = "changelog"
+
+# Agent Job output ConfigMap contract: the keys the worker and the Agent
+# Execution Job exchange through the Job's output ConfigMap. Defined here so both
+# the devloop-temporal-worker and devloop-agent-base images reference one source.
+KEY_RESULT = "result"  # the JSON-encoded AgentJobResult payload
+KEY_HUMAN_ANSWER = "human_answer"  # a human's mid-run reply patched back in
 
 
 class Phase(str, Enum):
@@ -97,7 +104,11 @@ class PostCommentsInput:
 
 @dataclass
 class TaskSpec:
-    """The instruction payload handed to an Agent Execution Job."""
+    """The instruction payload handed to an Agent Execution Job.
+
+    Serialized into the Job's ``TASK_SPEC`` env var by the worker and rebuilt by
+    the agent entrypoint — both via the methods below, so the field set has one
+    owner."""
 
     phase: str
     project_id: str
@@ -109,9 +120,34 @@ class TaskSpec:
     # phase-specific extras (review rubric, merge branch list, alert payload …)
     extra: dict = field(default_factory=dict)
 
+    def to_env_value(self) -> str:
+        """Render the ``TASK_SPEC`` env value the Agent Execution Job reads."""
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_env(cls, raw: str) -> "TaskSpec":
+        """Rebuild a TaskSpec from the ``TASK_SPEC`` env value (agent side)."""
+        d = json.loads(raw or "{}")
+        return cls(
+            phase=d.get("phase", "execute"),
+            project_id=d.get("project_id", ""),
+            issue_number=int(d.get("issue_number", 0) or 0),
+            title=d.get("title", ""),
+            body=d.get("body", ""),
+            branch=d.get("branch", ""),
+            instructions=d.get("instructions", ""),
+            extra=d.get("extra", {}) or {},
+        )
+
 
 @dataclass
 class AgentJobResult:
+    """The result an Agent Execution Job writes to its output ConfigMap.
+
+    The agent serializes one of these with :meth:`to_payload`; the worker rebuilds
+    it with :meth:`from_payload`. ``job_name`` is assigned by the reader (the
+    worker knows which Job it polled) and is not part of the wire payload."""
+
     status: str = JobStatus.FAILED.value
     job_name: str = ""
     issue_number: int = 0
@@ -133,6 +169,34 @@ class AgentJobResult:
     merged_issues: list[int] = field(default_factory=list)
     merge_commit: str = ""
     error: str = ""
+
+    def to_payload(self) -> dict:
+        """Render the dict the agent stores under ``KEY_RESULT`` (drops the
+        reader-assigned ``job_name``)."""
+        d = asdict(self)
+        d.pop("job_name", None)
+        return d
+
+    @classmethod
+    def from_payload(cls, payload: dict, job_name: str) -> "AgentJobResult":
+        """Rebuild an AgentJobResult from a Job's output payload (worker side)."""
+        return cls(
+            status=payload.get("status", JobStatus.FAILED.value),
+            job_name=job_name,
+            issue_number=int(payload.get("issue_number", 0) or 0),
+            branch=payload.get("branch", ""),
+            pr_url=payload.get("pr_url", ""),
+            commits=int(payload.get("commits", 0) or 0),
+            tests_passed=bool(payload.get("tests_passed", False)),
+            question=payload.get("question", ""),
+            plan=payload.get("plan"),
+            review=payload.get("review"),
+            diagnosis=payload.get("diagnosis"),
+            summary=payload.get("summary", ""),
+            merged_issues=list(payload.get("merged_issues", []) or []),
+            merge_commit=payload.get("merge_commit", ""),
+            error=payload.get("error", ""),
+        )
 
 
 @dataclass

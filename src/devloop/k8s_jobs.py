@@ -22,7 +22,6 @@ Design notes
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 import os
@@ -32,7 +31,15 @@ from temporalio.exceptions import ApplicationError
 
 from . import cluster
 from .cluster import NAMESPACE
-from .shared import AgentJobResult, AnswerInput, AwaitInput, DispatchInput, JobStatus
+from .shared import (
+    KEY_HUMAN_ANSWER,
+    KEY_RESULT,
+    AgentJobResult,
+    AnswerInput,
+    AwaitInput,
+    DispatchInput,
+    JobStatus,
+)
 from .projects import get_project
 
 log = logging.getLogger(__name__)
@@ -108,7 +115,7 @@ def render_job(d: DispatchInput, job_name: str) -> dict:
     # omneval ingest is X-API-Key auth, NOT bearer; the omneval project is
     # resolved server-side from the key, so no project_id is sent.
     env = [
-        {"name": "TASK_SPEC", "value": json.dumps(dataclasses.asdict(spec))},
+        {"name": "TASK_SPEC", "value": spec.to_env_value()},
         {"name": "PROJECT_ID", "value": d.project_id},
         {"name": "GITHUB_URL", "value": github_url},
         {"name": "DEFAULT_BRANCH", "value": default_branch},
@@ -238,30 +245,10 @@ def _read_output(job_name: str) -> dict | None:
     data = cluster.read_configmap_data(job_name)
     if not data:
         return None
-    raw = data.get("result")
+    raw = data.get(KEY_RESULT)
     if not raw:
         return None
     return json.loads(raw)
-
-
-def _result_from_payload(payload: dict, job_name: str) -> AgentJobResult:
-    return AgentJobResult(
-        status=payload.get("status", JobStatus.FAILED.value),
-        job_name=job_name,
-        issue_number=int(payload.get("issue_number", 0) or 0),
-        branch=payload.get("branch", ""),
-        pr_url=payload.get("pr_url", ""),
-        commits=int(payload.get("commits", 0) or 0),
-        tests_passed=bool(payload.get("tests_passed", False)),
-        question=payload.get("question", ""),
-        plan=payload.get("plan"),
-        review=payload.get("review"),
-        diagnosis=payload.get("diagnosis"),
-        summary=payload.get("summary", ""),
-        merged_issues=list(payload.get("merged_issues", []) or []),
-        merge_commit=payload.get("merge_commit", ""),
-        error=payload.get("error", ""),
-    )
 
 
 def _job_terminal(job) -> str | None:
@@ -295,13 +282,13 @@ async def _poll_to_terminal(
         payload = _read_output(job_name)
         if payload and payload.get("status") == JobStatus.AWAITING_HUMAN.value:
             log.info("job %s is awaiting a human reply", job_name)
-            return _result_from_payload(payload, job_name)
+            return AgentJobResult.from_payload(payload, job_name)
 
         job = batch.read_namespaced_job_status(job_name, NAMESPACE)
         terminal = _job_terminal(job)
         if terminal == "complete":
             payload = _read_output(job_name) or {"status": JobStatus.COMPLETE.value}
-            return _result_from_payload(payload, job_name)
+            return AgentJobResult.from_payload(payload, job_name)
         if terminal == "failed":
             payload = _read_output(job_name) or {}
             err = payload.get("error", f"Job {job_name} failed without output")
@@ -348,7 +335,7 @@ async def dispatch_agent_job(d: DispatchInput) -> AgentJobResult:
 @activity.defn
 async def answer_agent_job(inp: AnswerInput) -> None:
     """Write a human's reply to the Job's input ConfigMap so it can resume."""
-    cluster.patch_configmap_data(inp.job_name, {"human_answer": inp.answer})
+    cluster.patch_configmap_data(inp.job_name, {KEY_HUMAN_ANSWER: inp.answer})
     log.info("answered job %s", inp.job_name)
 
 

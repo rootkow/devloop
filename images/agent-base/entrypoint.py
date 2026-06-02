@@ -23,8 +23,13 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+
+# The Agent Job ↔ worker protocol (TaskSpec, AgentJobResult, ConfigMap keys) is
+# owned by the installed omneval-devloop package so both images share one
+# definition; renaming a field there propagates to both sides.
+from devloop.shared import KEY_HUMAN_ANSWER, KEY_RESULT, AgentJobResult, TaskSpec
 
 log = logging.getLogger("agent-entrypoint")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -114,32 +119,10 @@ def setup_tracing():
 
 
 # --------------------------------------------------------------------------- #
-# Task spec
+# Task spec — the type is the shared protocol (imported above)
 # --------------------------------------------------------------------------- #
-@dataclass
-class TaskSpec:
-    phase: str
-    project_id: str
-    issue_number: int = 0
-    title: str = ""
-    body: str = ""
-    branch: str = ""
-    instructions: str = ""
-    extra: dict = field(default_factory=dict)
-
-
 def load_task_spec() -> TaskSpec:
-    raw = json.loads(os.environ.get("TASK_SPEC", "{}"))
-    return TaskSpec(
-        phase=raw.get("phase", "execute"),
-        project_id=raw.get("project_id", ""),
-        issue_number=int(raw.get("issue_number", 0) or 0),
-        title=raw.get("title", ""),
-        body=raw.get("body", ""),
-        branch=raw.get("branch", ""),
-        instructions=raw.get("instructions", ""),
-        extra=raw.get("extra", {}) or {},
-    )
+    return TaskSpec.from_env(os.environ.get("TASK_SPEC", "{}"))
 
 
 # --------------------------------------------------------------------------- #
@@ -148,7 +131,7 @@ def load_task_spec() -> TaskSpec:
 def write_output(payload: dict) -> None:
     name = os.getenv("OUTPUT_CONFIGMAP", "")
     namespace = os.getenv("AGENTS_NAMESPACE", "agents")
-    body = {"result": json.dumps(payload)}
+    body = {KEY_RESULT: json.dumps(payload)}
 
     if os.getenv("OUTPUT_FILE"):
         Path(os.environ["OUTPUT_FILE"]).write_text(json.dumps(payload))
@@ -183,7 +166,7 @@ def read_human_answer() -> str:
 
     config.load_incluster_config()
     cm = client.CoreV1Api().read_namespaced_config_map(name, namespace)
-    return (cm.data or {}).get("human_answer", "")
+    return (cm.data or {}).get(KEY_HUMAN_ANSWER, "")
 
 
 def request_human_input(
@@ -207,7 +190,9 @@ def request_human_input(
     timeout = float(os.getenv("HUMAN_ANSWER_TIMEOUT_SECONDS", "14400"))
     poll = float(os.getenv("HUMAN_ANSWER_POLL_SECONDS", "15"))
 
-    write_output({"status": "awaiting_human", "question": question})
+    write_output(
+        AgentJobResult(status="awaiting_human", question=question).to_payload()
+    )
     log.info("awaiting human answer to: %s", question)
 
     deadline = time.monotonic() + timeout
@@ -793,7 +778,9 @@ def handle_plan(spec: TaskSpec, tracer) -> dict:
     outcome = run_agent(spec, workdir, tracer)
     plan = _extract_plan(outcome.summary) or {"issues": []}
     plan.setdefault("issues", [])
-    return {"status": "complete", "plan": plan, "summary": outcome.summary}
+    return AgentJobResult(
+        status="complete", plan=plan, summary=outcome.summary
+    ).to_payload()
 
 
 def handle_execute(spec: TaskSpec, tracer) -> dict:
@@ -824,9 +811,11 @@ def handle_execute(spec: TaskSpec, tracer) -> dict:
     commits = _commit_count(workdir, base_sha)
     if commits == 0:
         # No work produced — the workflow skips this issue (no branch/PR).
-        return {"status": "complete", "issue_number": spec.issue_number,
-                "branch": "", "pr_url": "", "commits": 0, "tests_passed": False,
-                "summary": outcome.summary or "agent produced no commits"}
+        return AgentJobResult(
+            status="complete",
+            issue_number=spec.issue_number,
+            summary=outcome.summary or "agent produced no commits",
+        ).to_payload()
 
     with tracer.start_as_current_span("tests"):
         tests_passed, test_output = run_project_tests(workdir)
@@ -843,15 +832,15 @@ def handle_execute(spec: TaskSpec, tracer) -> dict:
         title=f"agent: #{spec.issue_number} {spec.title}",
         body=f"Implements #{spec.issue_number}.\n\n{outcome.summary}\n\nCloses #{spec.issue_number}",
     )
-    return {
-        "status": "complete",
-        "issue_number": spec.issue_number,
-        "branch": branch,
-        "pr_url": pr_url,
-        "commits": commits,
-        "tests_passed": tests_passed,
-        "summary": "\n".join(summary_parts),
-    }
+    return AgentJobResult(
+        status="complete",
+        issue_number=spec.issue_number,
+        branch=branch,
+        pr_url=pr_url,
+        commits=commits,
+        tests_passed=tests_passed,
+        summary="\n".join(summary_parts),
+    ).to_payload()
 
 
 def handle_review(spec: TaskSpec, tracer) -> dict:
@@ -875,9 +864,14 @@ def handle_review(spec: TaskSpec, tracer) -> dict:
     if refinements:
         with tracer.start_as_current_span("push"):
             push_branch(workdir, spec.branch, force=True)
-    return {"status": "complete", "issue_number": spec.issue_number,
-            "branch": spec.branch, "commits": refinements,
-            "review": _extract_review(outcome.summary), "summary": outcome.summary}
+    return AgentJobResult(
+        status="complete",
+        issue_number=spec.issue_number,
+        branch=spec.branch,
+        commits=refinements,
+        review=_extract_review(outcome.summary),
+        summary=outcome.summary,
+    ).to_payload()
 
 
 def handle_merge(spec: TaskSpec, tracer) -> dict:
@@ -915,21 +909,22 @@ def handle_merge(spec: TaskSpec, tracer) -> dict:
             log.error("could not open a review PR for branch %s", branch)
 
     if not pr_urls:
-        return {
-            "status": "failed",
-            "merged_issues": _issue_ids(spec),
-            "summary": "Merge phase opened no review PR (gh pr create failed).",
-            "error": "no review PR opened",
-        }
+        return AgentJobResult(
+            status="failed",
+            merged_issues=_issue_ids(spec),
+            summary="Merge phase opened no review PR (gh pr create failed).",
+            error="no review PR opened",
+        ).to_payload()
 
-    return {
-        "status": "complete",
-        "merged_issues": _issue_ids(spec),
-        "pr_url": pr_urls[0],
-        "tests_passed": True,
-        "summary": "Opened review PR(s): " + ", ".join(pr_urls)
+    return AgentJobResult(
+        status="complete",
+        merged_issues=_issue_ids(spec),
+        pr_url=pr_urls[0],
+        tests_passed=True,
+        summary="Opened review PR(s): "
+        + ", ".join(pr_urls)
         + (f"\n\nTagged @{reviewer} for review." if reviewer else ""),
-    }
+    ).to_payload()
 
 
 def handle_diagnosis(spec: TaskSpec, tracer) -> dict:
@@ -952,7 +947,7 @@ def handle_diagnosis(spec: TaskSpec, tracer) -> dict:
             structured.get("recommended_actions")
         ),
     }
-    return {"status": "complete", "diagnosis": diagnosis}
+    return AgentJobResult(status="complete", diagnosis=diagnosis).to_payload()
 
 
 _HANDLERS = {
@@ -970,7 +965,11 @@ def main() -> int:
     log.info("phase=%s project=%s issue=%s", spec.phase, spec.project_id, spec.issue_number)
     handler = _HANDLERS.get(spec.phase)
     if handler is None:
-        write_output({"status": "failed", "error": f"unknown phase {spec.phase!r}"})
+        write_output(
+            AgentJobResult(
+                status="failed", error=f"unknown phase {spec.phase!r}"
+            ).to_payload()
+        )
         return 1
     try:
         payload = handler(spec, tracer)
@@ -978,7 +977,7 @@ def main() -> int:
         return 0
     except Exception as exc:  # noqa: BLE001
         log.exception("agent job failed")
-        write_output({"status": "failed", "error": str(exc)})
+        write_output(AgentJobResult(status="failed", error=str(exc)).to_payload())
         return 1
 
 

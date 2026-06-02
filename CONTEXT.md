@@ -25,8 +25,12 @@ A YAML config file (owned by the consumer, typically `agents/projects.yaml` in t
 _Avoid_: agent config, project database
 
 **Agent Base Image**:
-The container image (`ghcr.io/omneval/devloop-agent-base`) used as the `FROM` base for all per-project agent images. Contains the shared toolchain: OpenHands SDK, Temporal Python SDK, git, gh CLI, kubectl, flux CLI. Per-project images extend it with only the language runtime and prompts they need.
+The container image (`ghcr.io/omneval/devloop-agent-base`) used as the `FROM` base for all per-project agent images. Contains the shared toolchain: OpenHands SDK, `omneval-devloop` (for the shared Agent Job output ConfigMap protocol and its pinned Temporal + kubernetes clients), git, gh CLI, kubectl, flux CLI, argocd CLI. Per-project images extend it with only the language runtime and prompts they need.
 _Avoid_: base container, shared agent image
+
+**Agent Job output ConfigMap**:
+The Kubernetes ConfigMap an Agent Execution Job writes its result to and reads a human's mid-run reply from — the message-bus seam between the Job and the Temporal Orchestration Worker. The agent writes the JSON-encoded result under the `result` key (`AgentJobResult.to_payload`); the worker polls and rebuilds it (`AgentJobResult.from_payload`). A blocking question parks the Job and the worker patches the answer back under the `human_answer` key. The contract (field set and key names) is owned once in `devloop.shared` so both `devloop-temporal-worker` and `devloop-agent-base` reference one definition.
+_Avoid_: result ConfigMap, status ConfigMap, output map
 
 **Agent Execution Job**:
 A Kubernetes `batch/v1 Job` spawned by the Temporal Orchestration Worker for each Execute or Review phase. Each Job runs a single-use Temporal Activity Worker, processes one agent task via OpenHands SDK with `LocalWorkspace`, then exits. The pod is the isolation boundary — no Docker-in-Docker. The Job image is per-project, pulled from the Project Registry entry.

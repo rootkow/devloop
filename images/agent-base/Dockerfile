@@ -9,6 +9,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.17 /uv /uvx /bin/
 ARG GH_VERSION=2.93.0
 ARG KUBECTL_VERSION=1.34.1
 ARG FLUX_VERSION=2.8.8
+ARG ARGOCD_VERSION=2.13.3
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -38,14 +39,21 @@ RUN curl -fsSL --retry 5 --retry-delay 5 --max-time 300 \
     && rm /tmp/flux.tar.gz \
     && chmod +x /usr/local/bin/flux
 
-# Python SDKs: OpenHands agent runtime + Temporal orchestration client +
-# OTLP exporter (omneval tracing) + kubernetes (output ConfigMap writes).
+# argocd CLI
+RUN curl -fsSL --retry 5 --retry-delay 5 --max-time 300 \
+    -o /usr/local/bin/argocd \
+    "https://github.com/argoproj/argo-cd/releases/download/v${ARGOCD_VERSION}/argocd-linux-amd64" \
+    && chmod +x /usr/local/bin/argocd
+
+# Python SDKs: OpenHands agent runtime + OTLP exporter (omneval tracing).
+# omneval-devloop brings the shared Agent Job protocol (devloop.shared) plus its
+# pinned Temporal + kubernetes clients, so both the worker and this image use one
+# definition of the protocol.
 RUN UV_HTTP_TIMEOUT=300 uv pip install --system --no-cache \
     "openhands-ai==1.7.0" \
-    "temporalio==1.27.2" \
     "opentelemetry-sdk>=1.33.1" \
     "opentelemetry-exporter-otlp-proto-http>=1.33.1" \
-    "kubernetes>=33.1,<34"
+    "omneval-devloop"
 
 # Agent Execution Job entrypoint (issues #18/#19). Project repos are cloned at
 # runtime; this is the only application code baked into the image.
