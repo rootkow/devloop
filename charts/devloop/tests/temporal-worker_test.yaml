@@ -1,0 +1,74 @@
+suite: temporal worker deployment and service
+templates:
+  - templates/temporal-worker-deployment.yaml
+  - templates/temporal-worker-service.yaml
+tests:
+  - it: fails when temporalHost is not provided
+    # The validation helper is included in every template; helm aborts the whole
+    # render at the first fail() call, which it attributes to this template.
+    template: templates/temporal-worker-service.yaml
+    set:
+      temporalHost: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "temporalHost is required but was not set. Provide a value like 'temporal-frontend.agents.svc:7233'"
+
+  - it: renders nothing when the worker is disabled
+    set:
+      temporalHost: "temporal-frontend.agents.svc:7233"
+      temporalWorker.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: names the workload and wires the temporal host
+    template: templates/temporal-worker-deployment.yaml
+    set:
+      temporalHost: "temporal-frontend.agents.svc:7233"
+    asserts:
+      - containsDocument:
+          kind: Deployment
+          apiVersion: apps/v1
+          name: RELEASE-NAME-temporal-worker
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TEMPORAL_HOST
+            value: "temporal-frontend.agents.svc:7233"
+
+  - it: appends extraEnv verbatim and sets the service account
+    template: templates/temporal-worker-deployment.yaml
+    set:
+      temporalHost: "temporal-frontend.agents.svc:7233"
+      temporalWorker.serviceAccountName: orchestration-worker
+      temporalWorker.extraEnv:
+        - name: ORCHESTRATION_QUEUE
+          value: homelab-orchestration
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: orchestration-worker
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ORCHESTRATION_QUEUE
+            value: homelab-orchestration
+
+  - it: exposes webhook and health ports on the service
+    template: templates/temporal-worker-service.yaml
+    set:
+      temporalHost: "temporal-frontend.agents.svc:7233"
+      temporalWorker.webhookPort: 8088
+      temporalWorker.healthPort: 8080
+    asserts:
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: RELEASE-NAME-temporal-worker
+      - contains:
+          path: spec.ports
+          content:
+            name: webhook
+            port: 8088
+            targetPort: webhook
+            protocol: TCP
