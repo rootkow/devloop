@@ -233,8 +233,8 @@ class AnswerInput:
 
 @dataclass
 class AwaitInput:
+    """Resume polling a parked Job. Only the job name and poll cadence are needed
+    — the poll reads neither project nor task spec."""
+
     job_name: str
-    project_id: str
-    issue_number: int
-    task_spec: TaskSpec
     poll_interval_seconds: float = 5.0

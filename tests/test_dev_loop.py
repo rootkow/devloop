@@ -132,7 +132,10 @@ def _make_activities():
 
     @activity.defn(name="await_agent_job")
     async def await_agent_job(inp) -> AgentJobResult:
-        issue = inp["issue_number"] if isinstance(inp, dict) else inp.issue_number
+        # AwaitInput now carries only job_name + poll interval; the dispatch mock
+        # names parked jobs "j<issue>", so recover the issue from the job name.
+        job_name = inp["job_name"] if isinstance(inp, dict) else inp.job_name
+        issue = int(job_name.removeprefix("j") or 0)
         if M.await_status != JobStatus.COMPLETE.value:
             return AgentJobResult(
                 status=M.await_status,

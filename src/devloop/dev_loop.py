@@ -258,7 +258,7 @@ class DevLoopWorkflow:
             branch=issue.get("branch", ""),
         )
         result = await self._dispatch(inp, spec, issue_number=issue_no)
-        result = await self._answer_questions(inp, issue_no, spec, result)
+        result = await self._answer_questions(inp, issue_no, result)
 
         if result.status != JobStatus.COMPLETE.value:
             return {"issue_id": issue_no, "branch": "", "pr_url": "", "commits": 0}
@@ -274,7 +274,7 @@ class DevLoopWorkflow:
         }
 
     async def _answer_questions(
-        self, inp: DevLoopInput, issue_no: int, spec: TaskSpec, result: AgentJobResult
+        self, inp: DevLoopInput, issue_no: int, result: AgentJobResult
     ) -> AgentJobResult:
         while result.status == JobStatus.AWAITING_HUMAN.value:
             async with self._ask_lock:
@@ -297,9 +297,6 @@ class DevLoopWorkflow:
                 "await_agent_job",
                 AwaitInput(
                     result.job_name,
-                    inp.project_id,
-                    issue_no,
-                    spec,
                     poll_interval_seconds=inp.poll_interval_seconds,
                 ),
                 result_type=AgentJobResult,

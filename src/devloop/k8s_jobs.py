@@ -275,7 +275,7 @@ def _job_terminal(job) -> str | None:
 # Polling
 # --------------------------------------------------------------------------- #
 async def _poll_to_terminal(
-    batch, job_name: str, d: DispatchInput
+    batch, job_name: str, poll_interval: float
 ) -> AgentJobResult:
     """Poll a running Job until terminal or until it asks a human a question."""
     while True:
@@ -294,7 +294,7 @@ async def _poll_to_terminal(
             err = payload.get("error", f"Job {job_name} failed without output")
             raise ApplicationError(f"agent job failed: {err}", type="AgentJobFailed")
 
-        await asyncio.sleep(d.poll_interval_seconds)
+        await asyncio.sleep(poll_interval)
 
 
 # --------------------------------------------------------------------------- #
@@ -329,7 +329,7 @@ async def dispatch_agent_job(d: DispatchInput) -> AgentJobResult:
             raise
         log.info("job %s already exists, attaching", job_name)
 
-    return await _poll_to_terminal(batch, job_name, d)
+    return await _poll_to_terminal(batch, job_name, d.poll_interval_seconds)
 
 
 @activity.defn
@@ -342,13 +342,9 @@ async def answer_agent_job(inp: AnswerInput) -> None:
 @activity.defn
 async def await_agent_job(inp: AwaitInput) -> AgentJobResult:
     """Continue polling a Job that was previously parked on a human question."""
-    d = DispatchInput(
-        project_id=inp.project_id,
-        issue_number=inp.issue_number,
-        task_spec=inp.task_spec,
-        poll_interval_seconds=inp.poll_interval_seconds,
+    return await _poll_to_terminal(
+        cluster.batch(), inp.job_name, inp.poll_interval_seconds
     )
-    return await _poll_to_terminal(cluster.batch(), inp.job_name, d)
 
 
 @activity.defn
