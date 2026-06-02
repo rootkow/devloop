@@ -40,6 +40,11 @@ jobs:
   build_and_push:
     name: Build and push agent-base to GHCR
     needs: test
+    # Grant the package-push scope the reusable workflow needs; the repo default
+    # token is capped at packages: read.
+    permissions:
+      packages: write
+      contents: read
     uses: ./.github/workflows/build-image.yml
     with:
       image_name: devloop-agent-base

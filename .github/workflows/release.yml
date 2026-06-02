@@ -122,6 +122,11 @@ jobs:
   images:
     name: Build ${{ matrix.image_name }}
     needs: test
+    # A job calling a reusable workflow must grant the permissions that workflow
+    # needs; otherwise the token is capped at the repo default (packages: read).
+    permissions:
+      packages: write
+      contents: read
     strategy:
       matrix:
         include:
@@ -143,6 +148,9 @@ jobs:
     # Only build after the pinned SDK is published; the reusable workflow also
     # waits for it to be queryable on PyPI before building.
     needs: [test, meta, pypi]
+    permissions:
+      packages: write
+      contents: read
     strategy:
       matrix:
         include:
