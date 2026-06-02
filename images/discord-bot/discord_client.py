@@ -41,7 +41,9 @@ _resolve_channels()
 def channel_id(name: str) -> int:
     cid = _CHANNEL_IDS.get(name)
     if cid is None:
-        raise ValueError(f"channel '{name}' not configured — set DISCORD_CHANNEL_{name.upper()}")
+        raise ValueError(
+            f"channel '{name}' not configured — set DISCORD_CHANNEL_{name.upper()}"
+        )
     return cid
 
 

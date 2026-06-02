@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,6 +21,7 @@ from entrypoint import AgentOutcome, TaskSpec
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _noop_tracer():
     from contextlib import nullcontext
@@ -85,6 +85,7 @@ def origin(tmp_path):
 # Cycle 1 — no test files present → pass (no tests detected)
 # ===========================================================================
 
+
 def test_no_tests_detected_returns_true(tmp_path):
     """When no recognised project files exist, run_project_tests returns True
     (policy: no tests = pass with a note, so a bare project is not blocked)."""
@@ -98,11 +99,14 @@ def test_no_tests_detected_returns_true(tmp_path):
 # Cycle 2 — Go ecosystem
 # ===========================================================================
 
+
 def test_go_project_runs_go_test(tmp_path):
     """go.mod present → runs 'go test ./...'."""
     (tmp_path / "go.mod").write_text("module example.com/mymod\ngo 1.21\n")
 
-    with patch("subprocess.run", return_value=_fake_completed(0, "ok  example.com/mymod")) as mock_run:
+    with patch(
+        "subprocess.run", return_value=_fake_completed(0, "ok  example.com/mymod")
+    ) as mock_run:
         passed, output = entrypoint.run_project_tests(str(tmp_path))
 
     assert passed is True
@@ -115,7 +119,9 @@ def test_go_test_failure_returns_false(tmp_path):
     """Non-zero exit from 'go test ./...' → passed=False."""
     (tmp_path / "go.mod").write_text("module example.com/mymod\ngo 1.21\n")
 
-    with patch("subprocess.run", return_value=_fake_completed(1, "", "FAIL example.com/mymod")):
+    with patch(
+        "subprocess.run", return_value=_fake_completed(1, "", "FAIL example.com/mymod")
+    ):
         passed, output = entrypoint.run_project_tests(str(tmp_path))
 
     assert passed is False
@@ -126,11 +132,14 @@ def test_go_test_failure_returns_false(tmp_path):
 # Cycle 3 — Python ecosystem
 # ===========================================================================
 
+
 def test_python_project_runs_pytest(tmp_path):
     """pyproject.toml present → runs pytest."""
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = \"myapp\"\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "myapp"\n')
 
-    with patch("subprocess.run", return_value=_fake_completed(0, "1 passed")) as mock_run:
+    with patch(
+        "subprocess.run", return_value=_fake_completed(0, "1 passed")
+    ) as mock_run:
         passed, output = entrypoint.run_project_tests(str(tmp_path))
 
     assert passed is True
@@ -141,9 +150,13 @@ def test_python_project_runs_pytest(tmp_path):
 
 def test_setup_py_project_runs_pytest(tmp_path):
     """setup.py present → also detects Python and runs pytest."""
-    (tmp_path / "setup.py").write_text("from setuptools import setup; setup(name='x')\n")
+    (tmp_path / "setup.py").write_text(
+        "from setuptools import setup; setup(name='x')\n"
+    )
 
-    with patch("subprocess.run", return_value=_fake_completed(0, "1 passed")) as mock_run:
+    with patch(
+        "subprocess.run", return_value=_fake_completed(0, "1 passed")
+    ) as mock_run:
         passed, output = entrypoint.run_project_tests(str(tmp_path))
 
     assert passed is True
@@ -153,7 +166,7 @@ def test_setup_py_project_runs_pytest(tmp_path):
 
 def test_python_test_failure_returns_false(tmp_path):
     """Non-zero exit from pytest → passed=False."""
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = \"myapp\"\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "myapp"\n')
 
     with patch("subprocess.run", return_value=_fake_completed(1, "", "1 failed")):
         passed, output = entrypoint.run_project_tests(str(tmp_path))
@@ -165,6 +178,7 @@ def test_python_test_failure_returns_false(tmp_path):
 # Cycle 4 — Node ecosystem with a real test script
 # ===========================================================================
 
+
 def test_node_with_real_test_script_runs_npm_test(tmp_path):
     """package.json with a real test script → runs 'npm test'."""
     pkg = {
@@ -173,7 +187,9 @@ def test_node_with_real_test_script_runs_npm_test(tmp_path):
     }
     (tmp_path / "package.json").write_text(json.dumps(pkg))
 
-    with patch("subprocess.run", return_value=_fake_completed(0, "Tests: 5 passed")) as mock_run:
+    with patch(
+        "subprocess.run", return_value=_fake_completed(0, "Tests: 5 passed")
+    ) as mock_run:
         passed, output = entrypoint.run_project_tests(str(tmp_path))
 
     assert passed is True
@@ -186,7 +202,9 @@ def test_node_test_failure_returns_false(tmp_path):
     pkg = {"name": "myapp", "scripts": {"test": "jest --ci"}}
     (tmp_path / "package.json").write_text(json.dumps(pkg))
 
-    with patch("subprocess.run", return_value=_fake_completed(1, "", "Tests: 2 failed")):
+    with patch(
+        "subprocess.run", return_value=_fake_completed(1, "", "Tests: 2 failed")
+    ):
         passed, output = entrypoint.run_project_tests(str(tmp_path))
 
     assert passed is False
@@ -196,12 +214,13 @@ def test_node_test_failure_returns_false(tmp_path):
 # Cycle 5 — Node with npm default placeholder → skip (no false-fail)
 # ===========================================================================
 
+
 def test_node_npm_default_placeholder_is_skipped(tmp_path):
     """package.json with the npm default 'echo ... && exit 1' placeholder
     must NOT cause a false test failure — it is treated as 'no tests'."""
     pkg = {
         "name": "myapp",
-        "scripts": {"test": "echo \"Error: no test specified\" && exit 1"},
+        "scripts": {"test": 'echo "Error: no test specified" && exit 1'},
     }
     (tmp_path / "package.json").write_text(json.dumps(pkg))
 
@@ -244,10 +263,11 @@ def test_node_missing_scripts_key_is_skipped(tmp_path):
 # Cycle 6 — Multi-ecosystem (Go + Python): all must pass
 # ===========================================================================
 
+
 def test_multi_ecosystem_runs_all_suites(tmp_path):
     """go.mod + pyproject.toml → both 'go test ./...' and pytest are run."""
     (tmp_path / "go.mod").write_text("module example.com/m\ngo 1.21\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = \"x\"\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
 
     with patch("subprocess.run", return_value=_fake_completed(0, "ok")) as mock_run:
         passed, output = entrypoint.run_project_tests(str(tmp_path))
@@ -261,7 +281,7 @@ def test_multi_ecosystem_runs_all_suites(tmp_path):
 def test_multi_ecosystem_one_fails_returns_false(tmp_path):
     """If any suite fails, run_project_tests returns False."""
     (tmp_path / "go.mod").write_text("module example.com/m\ngo 1.21\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = \"x\"\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
 
     call_count = [0]
 
@@ -284,6 +304,7 @@ def test_multi_ecosystem_one_fails_returns_false(tmp_path):
 # Cycle 7 — Timeout is honoured
 # ===========================================================================
 
+
 def test_run_project_tests_passes_timeout(tmp_path):
     """run_project_tests passes a timeout to subprocess so a hung suite
     does not hang the Job forever."""
@@ -300,16 +321,22 @@ def test_run_project_tests_passes_timeout(tmp_path):
 # Cycle 8 — handle_execute uses real tests_passed
 # ===========================================================================
 
+
 def test_handle_execute_tests_passed_true_when_green(origin, tmp_path, monkeypatch):
     """handle_execute sets tests_passed=True when the test suite passes."""
     workdir = tmp_path / "repo"
 
     monkeypatch.setattr(
-        entrypoint, "run_agent",
+        entrypoint,
+        "run_agent",
         lambda spec, wd, tracer: AgentOutcome(summary="done", files_changed=True),
     )
-    monkeypatch.setattr(entrypoint, "open_draft_pr", lambda *a, **k: "https://github.com/x/y/pull/1")
-    monkeypatch.setattr(entrypoint, "run_project_tests", lambda wd, **kw: (True, "1 passed"))
+    monkeypatch.setattr(
+        entrypoint, "open_draft_pr", lambda *a, **k: "https://github.com/x/y/pull/1"
+    )
+    monkeypatch.setattr(
+        entrypoint, "run_project_tests", lambda wd, **kw: (True, "1 passed")
+    )
     monkeypatch.setattr(entrypoint, "_commit_count", lambda *a, **k: 1)
 
     monkeypatch.setenv("GITHUB_URL", str(origin))
@@ -327,11 +354,18 @@ def test_handle_execute_tests_passed_false_when_red(origin, tmp_path, monkeypatc
     workdir = tmp_path / "repo"
 
     monkeypatch.setattr(
-        entrypoint, "run_agent",
+        entrypoint,
+        "run_agent",
         lambda spec, wd, tracer: AgentOutcome(summary="done", files_changed=True),
     )
-    monkeypatch.setattr(entrypoint, "open_draft_pr", lambda *a, **k: "https://github.com/x/y/pull/1")
-    monkeypatch.setattr(entrypoint, "run_project_tests", lambda wd, **kw: (False, "FAIL: assertion error"))
+    monkeypatch.setattr(
+        entrypoint, "open_draft_pr", lambda *a, **k: "https://github.com/x/y/pull/1"
+    )
+    monkeypatch.setattr(
+        entrypoint,
+        "run_project_tests",
+        lambda wd, **kw: (False, "FAIL: assertion error"),
+    )
     monkeypatch.setattr(entrypoint, "_commit_count", lambda *a, **k: 1)
 
     monkeypatch.setenv("GITHUB_URL", str(origin))
@@ -344,16 +378,25 @@ def test_handle_execute_tests_passed_false_when_red(origin, tmp_path, monkeypatc
     assert result["tests_passed"] is False
 
 
-def test_handle_execute_includes_test_output_in_summary_on_failure(origin, tmp_path, monkeypatch):
+def test_handle_execute_includes_test_output_in_summary_on_failure(
+    origin, tmp_path, monkeypatch
+):
     """handle_execute includes test output in summary field so failures are visible."""
     workdir = tmp_path / "repo"
 
     monkeypatch.setattr(
-        entrypoint, "run_agent",
+        entrypoint,
+        "run_agent",
         lambda spec, wd, tracer: AgentOutcome(summary="done", files_changed=True),
     )
-    monkeypatch.setattr(entrypoint, "open_draft_pr", lambda *a, **k: "https://github.com/x/y/pull/1")
-    monkeypatch.setattr(entrypoint, "run_project_tests", lambda wd, **kw: (False, "FAIL: assertion x != y"))
+    monkeypatch.setattr(
+        entrypoint, "open_draft_pr", lambda *a, **k: "https://github.com/x/y/pull/1"
+    )
+    monkeypatch.setattr(
+        entrypoint,
+        "run_project_tests",
+        lambda wd, **kw: (False, "FAIL: assertion x != y"),
+    )
     monkeypatch.setattr(entrypoint, "_commit_count", lambda *a, **k: 1)
 
     monkeypatch.setenv("GITHUB_URL", str(origin))
@@ -364,7 +407,10 @@ def test_handle_execute_includes_test_output_in_summary_on_failure(origin, tmp_p
     result = entrypoint.handle_execute(spec, _noop_tracer())
 
     # The summary must contain something from the test failure output
-    assert "FAIL" in result.get("summary", "") or "assertion" in result.get("summary", "").lower()
+    assert (
+        "FAIL" in result.get("summary", "")
+        or "assertion" in result.get("summary", "").lower()
+    )
 
 
 def test_handle_execute_still_opens_pr_even_on_red(origin, tmp_path, monkeypatch):
@@ -373,14 +419,18 @@ def test_handle_execute_still_opens_pr_even_on_red(origin, tmp_path, monkeypatch
     pr_opened = []
 
     monkeypatch.setattr(
-        entrypoint, "run_agent",
+        entrypoint,
+        "run_agent",
         lambda spec, wd, tracer: AgentOutcome(summary="done", files_changed=True),
     )
     monkeypatch.setattr(
-        entrypoint, "open_draft_pr",
+        entrypoint,
+        "open_draft_pr",
         lambda *a, **k: pr_opened.append(True) or "https://github.com/x/y/pull/1",
     )
-    monkeypatch.setattr(entrypoint, "run_project_tests", lambda wd, **kw: (False, "1 failed"))
+    monkeypatch.setattr(
+        entrypoint, "run_project_tests", lambda wd, **kw: (False, "1 failed")
+    )
     monkeypatch.setattr(entrypoint, "_commit_count", lambda *a, **k: 1)
 
     monkeypatch.setenv("GITHUB_URL", str(origin))
@@ -403,6 +453,7 @@ def test_handle_execute_still_opens_pr_even_on_red(origin, tmp_path, monkeypatch
 # test_run_agent.py's open_review_pr tests.
 # ===========================================================================
 
+
 def _merge_env(origin, monkeypatch, reviewer="zbloss"):
     monkeypatch.setenv("GITHUB_URL", str(origin))
     monkeypatch.setenv("DEFAULT_BRANCH", "main")
@@ -414,13 +465,21 @@ def test_handle_merge_opens_pr_and_never_pushes_main(origin, monkeypatch):
     default branch."""
     _merge_env(origin, monkeypatch)
     opened = []
-    monkeypatch.setattr(entrypoint, "open_review_pr",
-                        lambda *a, **k: opened.append(a) or "https://x/pull/1")
-    monkeypatch.setattr(entrypoint, "push_branch",
-                        lambda *a, **k: pytest.fail("merge must not push main"))
+    monkeypatch.setattr(
+        entrypoint,
+        "open_review_pr",
+        lambda *a, **k: opened.append(a) or "https://x/pull/1",
+    )
+    monkeypatch.setattr(
+        entrypoint,
+        "push_branch",
+        lambda *a, **k: pytest.fail("merge must not push main"),
+    )
 
-    spec = _spec(phase="merge",
-                 extra={"branches": ["agent/issue-1"], "issues": [{"id": "1", "title": "X"}]})
+    spec = _spec(
+        phase="merge",
+        extra={"branches": ["agent/issue-1"], "issues": [{"id": "1", "title": "X"}]},
+    )
     result = entrypoint.handle_merge(spec, _noop_tracer())
 
     assert opened, "open_review_pr must be called"
@@ -434,8 +493,10 @@ def test_handle_merge_fails_with_info_when_no_pr(origin, monkeypatch):
     _merge_env(origin, monkeypatch)
     monkeypatch.setattr(entrypoint, "open_review_pr", lambda *a, **k: "")
 
-    spec = _spec(phase="merge",
-                 extra={"branches": ["agent/issue-1"], "issues": [{"id": "1", "title": "X"}]})
+    spec = _spec(
+        phase="merge",
+        extra={"branches": ["agent/issue-1"], "issues": [{"id": "1", "title": "X"}]},
+    )
     result = entrypoint.handle_merge(spec, _noop_tracer())
 
     assert result["status"] == "failed"
@@ -446,11 +507,17 @@ def test_handle_merge_sets_merged_issues_on_success(origin, monkeypatch):
     """Successful merge result includes the issue list (issues whose PRs were
     opened for review)."""
     _merge_env(origin, monkeypatch)
-    monkeypatch.setattr(entrypoint, "open_review_pr", lambda *a, **k: "https://x/pull/7")
+    monkeypatch.setattr(
+        entrypoint, "open_review_pr", lambda *a, **k: "https://x/pull/7"
+    )
 
-    spec = _spec(phase="merge",
-                 extra={"branches": ["agent/issue-7"],
-                        "issues": [{"id": "7", "title": "Seven"}]})
+    spec = _spec(
+        phase="merge",
+        extra={
+            "branches": ["agent/issue-7"],
+            "issues": [{"id": "7", "title": "Seven"}],
+        },
+    )
     result = entrypoint.handle_merge(spec, _noop_tracer())
 
     assert result.get("merged_issues") == [7]

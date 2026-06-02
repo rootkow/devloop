@@ -223,7 +223,7 @@ def _extract_question(text: str) -> str | None:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("QUESTION:"):
-            return stripped[len("QUESTION:"):].strip()
+            return stripped[len("QUESTION:") :].strip()
     return None
 
 
@@ -240,8 +240,10 @@ def _run(cmd: list[str], cwd: str | None = None) -> str:
 # --------------------------------------------------------------------------- #
 # Test-suite discovery and execution
 # --------------------------------------------------------------------------- #
-_NPM_DEFAULT_PLACEHOLDER = "echo \"Error: no test specified\" && exit 1"
-_MAX_TEST_OUTPUT = 4096  # bytes kept in result payload (truncated for Discord / Temporal UI)
+_NPM_DEFAULT_PLACEHOLDER = 'echo "Error: no test specified" && exit 1'
+_MAX_TEST_OUTPUT = (
+    4096  # bytes kept in result payload (truncated for Discord / Temporal UI)
+)
 
 
 def run_project_tests(workdir: str, timeout: int = 300) -> tuple[bool, str]:
@@ -352,9 +354,23 @@ def open_draft_pr(workdir: str, branch: str, base: str, title: str, body: str) -
     non-zero / 403), or a PR for the branch already exists. Returns the PR URL,
     or "" when creation failed (logged, not raised)."""
     result = subprocess.run(
-        ["gh", "pr", "create", "--draft", "--head", branch, "--base", base,
-         "--title", title, "--body", body],
-        cwd=workdir, text=True, capture_output=True,
+        [
+            "gh",
+            "pr",
+            "create",
+            "--draft",
+            "--head",
+            branch,
+            "--base",
+            base,
+            "--title",
+            title,
+            "--body",
+            body,
+        ],
+        cwd=workdir,
+        text=True,
+        capture_output=True,
     )
     if result.returncode != 0:
         log.warning(
@@ -417,11 +433,26 @@ def open_review_pr(
         if is_draft:
             _gh(["pr", "ready", branch, "-R", repo])
     else:
-        r = _gh(["pr", "create", "-R", repo, "-H", branch, "-B", base,
-                 "-t", title, "-b", body])
+        r = _gh(
+            [
+                "pr",
+                "create",
+                "-R",
+                repo,
+                "-H",
+                branch,
+                "-B",
+                base,
+                "-t",
+                title,
+                "-b",
+                body,
+            ]
+        )
         if r.returncode != 0:
-            log.warning("review PR not created: %s",
-                        (r.stderr or r.stdout or "").strip())
+            log.warning(
+                "review PR not created: %s", (r.stderr or r.stdout or "").strip()
+            )
             return ""
         out = (r.stdout or "").strip()
         url = out.splitlines()[-1] if out else ""
@@ -430,8 +461,17 @@ def open_review_pr(
         # Self-assignment always works and notifies; review request is best-effort.
         _gh(["pr", "edit", branch, "-R", repo, "--add-assignee", reviewer])
         _gh(["pr", "edit", branch, "-R", repo, "--add-reviewer", reviewer])
-        _gh(["pr", "comment", branch, "-R", repo,
-             "--body", f"cc @{reviewer} — ready for review."])
+        _gh(
+            [
+                "pr",
+                "comment",
+                branch,
+                "-R",
+                repo,
+                "--body",
+                f"cc @{reviewer} — ready for review.",
+            ]
+        )
     return url
 
 
@@ -609,12 +649,17 @@ def _prompt_variables(spec: TaskSpec) -> dict[str, str]:
             "AGENT_LABEL": spec.extra.get("agent_label", "agent-ready"),
             "FEEDBACK": (
                 "# REVISION\n\nThe previous plan was rejected. Address this "
-                f"feedback before re-planning:\n\n{feedback}" if feedback else ""
+                f"feedback before re-planning:\n\n{feedback}"
+                if feedback
+                else ""
             ),
         }
     if spec.phase == "execute":
-        return {"TASK_ID": str(spec.issue_number), "ISSUE_TITLE": spec.title,
-                "BRANCH": spec.branch}
+        return {
+            "TASK_ID": str(spec.issue_number),
+            "ISSUE_TITLE": spec.title,
+            "BRANCH": spec.branch,
+        }
     if spec.phase == "review":
         return {"BRANCH": spec.branch, "SOURCE_BRANCH": base}
     if spec.phase == "merge":
@@ -628,8 +673,10 @@ def _prompt_variables(spec: TaskSpec) -> dict[str, str]:
         }
     if spec.phase == "diagnosis":
         alert = spec.extra.get("alert", {}) or {}
-        details = {"labels": alert.get("labels", {}),
-                   "annotations": alert.get("annotations", {})}
+        details = {
+            "labels": alert.get("labels", {}),
+            "annotations": alert.get("annotations", {}),
+        }
         return {
             "ALERT_NAME": str(alert.get("name", "") or "unknown-alert"),
             "ALERT_SEVERITY": str(alert.get("severity", "") or "warning"),
@@ -735,13 +782,17 @@ def _normalize_actions(actions) -> list[dict]:
             cmd = str(a.get("action", "") or "").strip()
             if not cmd:
                 continue
-            out.append({
-                "action": cmd,
-                "requires_approval": bool(a.get("requires_approval", False)),
-                "rationale": str(a.get("rationale", "") or ""),
-            })
+            out.append(
+                {
+                    "action": cmd,
+                    "requires_approval": bool(a.get("requires_approval", False)),
+                    "rationale": str(a.get("rationale", "") or ""),
+                }
+            )
         elif isinstance(a, str) and a.strip():
-            out.append({"action": a.strip(), "requires_approval": False, "rationale": ""})
+            out.append(
+                {"action": a.strip(), "requires_approval": False, "rationale": ""}
+            )
     return out
 
 
@@ -805,8 +856,15 @@ def handle_execute(spec: TaskSpec, tracer) -> dict:
     # uncommitted so a half-finished change still surfaces as commits.
     _run(["git", "add", "-A"], cwd=workdir)
     if _run(["git", "status", "--porcelain"], cwd=workdir).strip():
-        _run(["git", "commit", "-m",
-              f"agent: implement #{spec.issue_number} {spec.title}"], cwd=workdir)
+        _run(
+            [
+                "git",
+                "commit",
+                "-m",
+                f"agent: implement #{spec.issue_number} {spec.title}",
+            ],
+            cwd=workdir,
+        )
 
     commits = _commit_count(workdir, base_sha)
     if commits == 0:
@@ -828,7 +886,9 @@ def handle_execute(spec: TaskSpec, tracer) -> dict:
         summary_parts.append(f"\n--- test output ---\n{test_snippet}")
 
     pr_url = open_draft_pr(
-        workdir, branch, base,
+        workdir,
+        branch,
+        base,
         title=f"agent: #{spec.issue_number} {spec.title}",
         body=f"Implements #{spec.issue_number}.\n\n{outcome.summary}\n\nCloses #{spec.issue_number}",
     )
@@ -858,7 +918,9 @@ def handle_review(spec: TaskSpec, tracer) -> dict:
 
     _run(["git", "add", "-A"], cwd=workdir)
     if _run(["git", "status", "--porcelain"], cwd=workdir).strip():
-        _run(["git", "commit", "-m", f"review: refine #{spec.issue_number}"], cwd=workdir)
+        _run(
+            ["git", "commit", "-m", f"review: refine #{spec.issue_number}"], cwd=workdir
+        )
 
     refinements = _commit_count(workdir, base_sha)
     if refinements:
@@ -962,7 +1024,9 @@ _HANDLERS = {
 def main() -> int:
     tracer = setup_tracing()
     spec = load_task_spec()
-    log.info("phase=%s project=%s issue=%s", spec.phase, spec.project_id, spec.issue_number)
+    log.info(
+        "phase=%s project=%s issue=%s", spec.phase, spec.project_id, spec.issue_number
+    )
     handler = _HANDLERS.get(spec.phase)
     if handler is None:
         write_output(

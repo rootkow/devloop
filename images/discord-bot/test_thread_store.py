@@ -10,10 +10,8 @@ Run with:
     uv run --with pytest --with kubernetes pytest -q
 """
 
-import json
 import types
 
-import pytest
 
 import thread_store
 
@@ -21,6 +19,7 @@ import thread_store
 # ---------------------------------------------------------------------------
 # Fake kubernetes infrastructure
 # ---------------------------------------------------------------------------
+
 
 def _make_configmap(data: dict):
     """Return a SimpleNamespace that looks like a V1ConfigMap with .data."""
@@ -56,6 +55,7 @@ def _patch_v1(monkeypatch, fake_api: FakeCoreV1Api):
 # Tracer bullet: put + get_thread
 # ---------------------------------------------------------------------------
 
+
 def test_put_stores_mapping_and_get_thread_returns_it(monkeypatch):
     fake = FakeCoreV1Api()
     _patch_v1(monkeypatch, fake)
@@ -69,6 +69,7 @@ def test_put_stores_mapping_and_get_thread_returns_it(monkeypatch):
 # get_workflow returns correct workflow_id
 # ---------------------------------------------------------------------------
 
+
 def test_get_workflow_returns_workflow_id_for_stored_thread(monkeypatch):
     fake = FakeCoreV1Api()
     _patch_v1(monkeypatch, fake)
@@ -81,6 +82,7 @@ def test_get_workflow_returns_workflow_id_for_stored_thread(monkeypatch):
 # ---------------------------------------------------------------------------
 # Durability across restart: new fake client seeded with same backing dict
 # ---------------------------------------------------------------------------
+
 
 def test_mapping_survives_bot_restart(monkeypatch):
     """Simulate restart: discard the first fake client, seed a second with the
@@ -107,6 +109,7 @@ def test_mapping_survives_bot_restart(monkeypatch):
 # Pre-restart thread still signals correct workflow after restart
 # ---------------------------------------------------------------------------
 
+
 def test_reply_on_pre_restart_thread_signals_correct_workflow(monkeypatch):
     """A Discord reply arriving after a bot restart resolves to the right
     workflow_id so the Temporal signal is sent to the correct handle.
@@ -131,6 +134,7 @@ def test_reply_on_pre_restart_thread_signals_correct_workflow(monkeypatch):
 # ---------------------------------------------------------------------------
 # Cross-talk: multiple mappings, each independent; deleting one leaves others
 # ---------------------------------------------------------------------------
+
 
 def test_multiple_mappings_no_cross_talk(monkeypatch):
     """Each thread_id maps only to its own workflow_id and vice-versa."""
@@ -179,6 +183,7 @@ def test_deleting_one_mapping_does_not_affect_others(monkeypatch):
 # ---------------------------------------------------------------------------
 # Missing key returns None (not KeyError)
 # ---------------------------------------------------------------------------
+
 
 def test_get_thread_returns_none_for_unknown_workflow(monkeypatch):
     fake = FakeCoreV1Api()

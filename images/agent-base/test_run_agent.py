@@ -22,7 +22,7 @@ import json
 import sys
 import types
 from contextlib import contextmanager
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -34,14 +34,17 @@ from entrypoint import AgentOutcome, TaskSpec
 # Helpers to inject a fake openhands.sdk module tree into sys.modules
 # --------------------------------------------------------------------------- #
 
+
 class _FakeConversationState:
     """Minimal stand-in for LocalConversation.state."""
+
     def __init__(self, events=None):
         self.events = events or []
 
 
 class _FakeConversation:
     """Stand-in for LocalConversation."""
+
     def __init__(self, *, agent, workspace, **kw):
         self.agent = agent
         self.workspace = workspace
@@ -57,6 +60,7 @@ class _FakeConversation:
 
 class _ErrorConversation(_FakeConversation):
     """Raises a RuntimeError from run() to simulate model failures."""
+
     def run(self):
         raise RuntimeError("connection refused: model endpoint unreachable")
 
@@ -99,8 +103,11 @@ def _fake_sdk(
 
     old = {}
     keys = (
-        "openhands", "openhands.sdk", "openhands.sdk.conversation",
-        "openhands.tools", "openhands.tools.preset",
+        "openhands",
+        "openhands.sdk",
+        "openhands.sdk.conversation",
+        "openhands.tools",
+        "openhands.tools.preset",
         "openhands.tools.preset.default",
     )
     for key in keys:
@@ -151,6 +158,7 @@ def _spec(**kw) -> TaskSpec:
 # Tracer 1: AGENT_STUB=1 fast-path
 # --------------------------------------------------------------------------- #
 
+
 def test_stub_returns_stub_outcome(monkeypatch):
     """AGENT_STUB=1 returns the stub AgentOutcome without touching the SDK."""
     monkeypatch.setenv("AGENT_STUB", "1")
@@ -165,6 +173,7 @@ def test_stub_returns_stub_outcome(monkeypatch):
 # --------------------------------------------------------------------------- #
 # Tracer 2: happy path — correct SDK object construction
 # --------------------------------------------------------------------------- #
+
 
 def test_happy_path_constructs_sdk_objects_correctly(monkeypatch, tmp_path):
     """run_agent passes model/base_url/api_key to LLM, builds the agent via
@@ -237,6 +246,7 @@ def test_happy_path_honours_default_env(monkeypatch, tmp_path):
 # Tracer 3: model-error path → AgentOutcome with failure, no exception escapes
 # --------------------------------------------------------------------------- #
 
+
 def test_model_error_returns_failed_outcome_without_raising(monkeypatch, tmp_path):
     """When run() raises, run_agent catches it and returns a failed AgentOutcome.
     No exception must escape — the Job must terminate cleanly."""
@@ -247,8 +257,10 @@ def test_model_error_returns_failed_outcome_without_raising(monkeypatch, tmp_pat
 
     assert isinstance(outcome, AgentOutcome)
     assert outcome.files_changed is False
-    assert "error" in outcome.summary.lower() or outcome.structured is not None or (
-        outcome.summary != "" and outcome.summary != "agent completed"
+    assert (
+        "error" in outcome.summary.lower()
+        or outcome.structured is not None
+        or (outcome.summary != "" and outcome.summary != "agent completed")
     )
 
 
@@ -265,6 +277,7 @@ def test_model_error_summary_contains_error_detail(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------- #
 # Tracer 4: empty diff / no changes produced
 # --------------------------------------------------------------------------- #
+
 
 def test_empty_diff_sets_files_changed_false(monkeypatch, tmp_path):
     """When get_agent_final_response returns empty string, files_changed=False."""
@@ -291,10 +304,11 @@ def test_empty_diff_summary_is_not_a_false_success(monkeypatch, tmp_path):
 # Tracer 5: OTEL_SERVICE_NAME static config check
 # --------------------------------------------------------------------------- #
 
+
 def test_otel_service_name_is_read_from_env(monkeypatch):
     """setup_tracing() uses OTEL_SERVICE_NAME for the service resource attribute.
     We verify statically that the code reads the right env var."""
-    import inspect, ast, textwrap
+    import inspect
 
     src = inspect.getsource(entrypoint.setup_tracing)
     # The function must reference OTEL_SERVICE_NAME
@@ -365,6 +379,7 @@ def test_otel_noop_tracer_when_sdk_absent(monkeypatch):
     """setup_tracing returns a no-op tracer when OTel SDK is not installed."""
     # Hide the OTel SDK by patching the import
     import builtins
+
     real_import = builtins.__import__
 
     def blocking_import(name, *args, **kwargs):
@@ -376,7 +391,6 @@ def test_otel_noop_tracer_when_sdk_absent(monkeypatch):
         tracer = entrypoint.setup_tracing()
 
     # Must support start_as_current_span as a context manager
-    from contextlib import AbstractContextManager
     ctx = tracer.start_as_current_span("test-span")
     assert hasattr(ctx, "__enter__") and hasattr(ctx, "__exit__")
 
@@ -385,18 +399,21 @@ def test_otel_noop_tracer_when_sdk_absent(monkeypatch):
 # Tracer 6: full main() doesn't hang on model error (integration)
 # --------------------------------------------------------------------------- #
 
+
 def test_main_records_failure_on_model_error(tmp_path, monkeypatch):
     """When the SDK raises during run_agent, main() writes a failed payload
     to the output file and returns non-zero — the Job terminates cleanly."""
-    import json, subprocess
-    from pathlib import Path
+    import json
+    import subprocess
 
     out_file = tmp_path / "out.json"
 
     # We need a real git repo for handle_execute; use a simple bare repo
     bare = tmp_path / "origin.git"
     bare.mkdir()
-    subprocess.run(["git", "init", "--bare", "-b", "main", bare], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", bare], check=True, capture_output=True
+    )
     seed = tmp_path / "seed"
     seed.mkdir()
     for cmd in [
@@ -406,18 +423,41 @@ def test_main_records_failure_on_model_error(tmp_path, monkeypatch):
     ]:
         subprocess.run(cmd, check=True, capture_output=True)
     (seed / "README.md").write_text("hello\n")
-    subprocess.run(["git", "-C", str(seed), "add", "-A"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(seed), "commit", "-m", "init"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(seed), "remote", "add", "origin", str(bare)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(seed), "push", "origin", "main"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(seed), "add", "-A"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(seed), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(seed), "remote", "add", "origin", str(bare)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(seed), "push", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
 
     workdir = tmp_path / "repo"
 
     monkeypatch.delenv("AGENT_STUB", raising=False)
-    monkeypatch.setenv("TASK_SPEC", json.dumps({
-        "phase": "execute", "project_id": "omneval", "issue_number": 99,
-        "title": "test", "body": "b", "instructions": "i",
-    }))
+    monkeypatch.setenv(
+        "TASK_SPEC",
+        json.dumps(
+            {
+                "phase": "execute",
+                "project_id": "omneval",
+                "issue_number": 99,
+                "title": "test",
+                "body": "b",
+                "instructions": "i",
+            }
+        ),
+    )
     monkeypatch.setenv("GITHUB_URL", str(bare))
     monkeypatch.setenv("DEFAULT_BRANCH", "main")
     monkeypatch.setenv("WORKDIR", str(workdir))
@@ -428,7 +468,7 @@ def test_main_records_failure_on_model_error(tmp_path, monkeypatch):
         # run_agent is called inside handle_execute; the error path should
         # cause the push to still fail (nothing committed), but main() must
         # record a terminal result
-        rc = entrypoint.main()
+        entrypoint.main()
 
     payload = json.loads(out_file.read_text())
     # Either run_agent handled it gracefully and the outer flow continued
@@ -467,16 +507,28 @@ def test_handle_merge_opens_review_pr_and_does_not_push_main(monkeypatch):
     calls = {}
 
     def fake_open(repo, branch, base, title, body, reviewer):
-        calls.update(repo=repo, branch=branch, base=base, title=title,
-                     body=body, reviewer=reviewer)
+        calls.update(
+            repo=repo,
+            branch=branch,
+            base=base,
+            title=title,
+            body=body,
+            reviewer=reviewer,
+        )
         return "https://github.com/omneval/omneval/pull/99"
 
     monkeypatch.setattr(entrypoint, "open_review_pr", fake_open)
     # Guard: a regression that re-introduced the direct merge would call these.
-    monkeypatch.setattr(entrypoint, "push_branch",
-                        lambda *a, **k: pytest.fail("merge phase must not push"))
-    monkeypatch.setattr(entrypoint, "clone_repo",
-                        lambda *a, **k: pytest.fail("merge phase must not clone"))
+    monkeypatch.setattr(
+        entrypoint,
+        "push_branch",
+        lambda *a, **k: pytest.fail("merge phase must not push"),
+    )
+    monkeypatch.setattr(
+        entrypoint,
+        "clone_repo",
+        lambda *a, **k: pytest.fail("merge phase must not clone"),
+    )
 
     result = entrypoint.handle_merge(_merge_spec(), _noop_tracer())
 
@@ -519,12 +571,13 @@ def test_open_review_pr_marks_existing_draft_ready_and_tags(monkeypatch):
 
     monkeypatch.setattr(entrypoint, "_gh", fake_gh)
     url = entrypoint.open_review_pr(
-        "omneval/omneval", "agent/issue-7", "main", "t", "b", "zbloss")
+        "omneval/omneval", "agent/issue-7", "main", "t", "b", "zbloss"
+    )
 
     assert url == "https://x/pull/7"
     verbs = [a[:2] for a in cmds]
     assert ["pr", "view"] in verbs
-    assert ["pr", "ready"] in verbs       # un-drafted
+    assert ["pr", "ready"] in verbs  # un-drafted
     assert not any(a[:2] == ["pr", "create"] for a in cmds)  # no duplicate PR
     assert any("--add-assignee" in a for a in cmds)
     assert any("--add-reviewer" in a for a in cmds)
@@ -540,12 +593,14 @@ def test_open_review_pr_creates_when_none_exists(monkeypatch):
             return types.SimpleNamespace(returncode=1, stdout="", stderr="no PR")
         if args[:2] == ["pr", "create"]:
             return types.SimpleNamespace(
-                returncode=0, stdout="https://x/pull/7\n", stderr="")
+                returncode=0, stdout="https://x/pull/7\n", stderr=""
+            )
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(entrypoint, "_gh", fake_gh)
     url = entrypoint.open_review_pr(
-        "omneval/omneval", "agent/issue-7", "main", "t", "b", "zbloss")
+        "omneval/omneval", "agent/issue-7", "main", "t", "b", "zbloss"
+    )
 
     assert url == "https://x/pull/7"
     assert any(a[:2] == ["pr", "create"] for a in cmds)
@@ -569,23 +624,25 @@ def test_extract_diagnosis_parses_tagged_block():
 
 
 def test_extract_diagnosis_tolerates_json_fence_inside_tags():
-    text = "<diagnosis>\n```json\n{\"severity\":\"warning\",\"recommended_actions\":[]}\n```\n</diagnosis>"
+    text = '<diagnosis>\n```json\n{"severity":"warning","recommended_actions":[]}\n```\n</diagnosis>'
     d = entrypoint._extract_diagnosis(text)
     assert d == {"severity": "warning", "recommended_actions": []}
 
 
 def test_extract_diagnosis_falls_back_without_tags():
-    d = entrypoint._extract_diagnosis('blah {"severity":"info","recommended_actions":[]} end')
+    d = entrypoint._extract_diagnosis(
+        'blah {"severity":"info","recommended_actions":[]} end'
+    )
     assert d["severity"] == "info"
 
 
 def test_normalize_actions_defaults_and_filters():
     actions = [
-        {"action": "kubectl delete pod x -n ns"},                       # default approval False
-        {"action": "kubectl drain node1", "requires_approval": True},   # explicit gate
-        {"action": "  "},                                                # empty -> dropped
-        {"rationale": "no action key"},                                  # no command -> dropped
-        "flux reconcile helmrelease omneval -n omneval",                # bare string
+        {"action": "kubectl delete pod x -n ns"},  # default approval False
+        {"action": "kubectl drain node1", "requires_approval": True},  # explicit gate
+        {"action": "  "},  # empty -> dropped
+        {"rationale": "no action key"},  # no command -> dropped
+        "flux reconcile helmrelease omneval -n omneval",  # bare string
     ]
     out = entrypoint._normalize_actions(actions)
     assert [a["action"] for a in out] == [
@@ -599,36 +656,60 @@ def test_normalize_actions_defaults_and_filters():
 
 
 def test_handle_diagnosis_returns_normalized_actions(monkeypatch):
-    spec = TaskSpec(phase="diagnosis", project_id="homelab-alerts",
-                    extra={"alert": {"name": "KubePodCrashLooping", "severity": "critical",
-                                     "namespace": "omneval"}})
+    spec = TaskSpec(
+        phase="diagnosis",
+        project_id="homelab-alerts",
+        extra={
+            "alert": {
+                "name": "KubePodCrashLooping",
+                "severity": "critical",
+                "namespace": "omneval",
+            }
+        },
+    )
     structured = {
         "severity": "critical",
         "affected_resource": "omneval/Pod/omneval-writer-0",
         "root_cause_hypothesis": "crashloop after bad config",
         "recommended_actions": [
-            {"action": "kubectl rollout restart deployment/foo -n omneval", "requires_approval": False},
+            {
+                "action": "kubectl rollout restart deployment/foo -n omneval",
+                "requires_approval": False,
+            },
         ],
     }
-    monkeypatch.setattr(entrypoint, "run_agent",
-                        lambda *a, **k: AgentOutcome(summary="x", structured=structured))
+    monkeypatch.setattr(
+        entrypoint,
+        "run_agent",
+        lambda *a, **k: AgentOutcome(summary="x", structured=structured),
+    )
     result = entrypoint.handle_diagnosis(spec, _noop_tracer())
     d = result["diagnosis"]
     assert result["status"] == "complete"
     assert d["affected_resource"] == "omneval/Pod/omneval-writer-0"
     assert d["recommended_actions"][0] == {
         "action": "kubectl rollout restart deployment/foo -n omneval",
-        "requires_approval": False, "rationale": "",
+        "requires_approval": False,
+        "rationale": "",
     }
 
 
 def test_diagnosis_prompt_renders_alert_fields():
-    spec = TaskSpec(phase="diagnosis", project_id="homelab-alerts",
-                    extra={"alert": {"name": "ContainerOOMKilled", "severity": "critical",
-                                     "namespace": "omneval",
-                                     "labels": {"pod": "omneval-writer-0"}, "annotations": {}}})
+    spec = TaskSpec(
+        phase="diagnosis",
+        project_id="homelab-alerts",
+        extra={
+            "alert": {
+                "name": "ContainerOOMKilled",
+                "severity": "critical",
+                "namespace": "omneval",
+                "labels": {"pod": "omneval-writer-0"},
+                "annotations": {},
+            }
+        },
+    )
     msg = entrypoint.build_agent_message(spec)
     assert "ContainerOOMKilled" in msg
-    assert "omneval-writer-0" in msg            # alert details injected
-    assert "<diagnosis>" in msg                  # schema present
+    assert "omneval-writer-0" in msg  # alert details injected
+    assert "<diagnosis>" in msg  # schema present
     assert "requires_approval" in msg

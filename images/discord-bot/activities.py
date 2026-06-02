@@ -66,7 +66,9 @@ class DiscordActivities:
         thread_name = inp.thread_name or f"workflow {inp.workflow_id[:8]}"
         thread = await self._bot.open_thread(inp.channel, thread_name, inp.message)
         thread_store.put(inp.workflow_id, str(thread.id))
-        activity.logger.info("opened thread %s for workflow %s", thread.id, inp.workflow_id)
+        activity.logger.info(
+            "opened thread %s for workflow %s", thread.id, inp.workflow_id
+        )
         return SendMessageOutput(thread_id=str(thread.id))
 
     @activity.defn(name="send_notification")
@@ -75,7 +77,8 @@ class DiscordActivities:
         thread_id = thread_store.get_thread(inp.workflow_id)
         if not thread_id:
             activity.logger.warning(
-                "no thread found for workflow %s — notification dropped", inp.workflow_id
+                "no thread found for workflow %s — notification dropped",
+                inp.workflow_id,
             )
             return
         await self._bot.post_to_thread(thread_id, inp.message)
@@ -85,7 +88,9 @@ class DiscordActivities:
         """Lock and archive the Discord thread for a completed workflow."""
         thread_id = thread_store.get_thread(inp.workflow_id)
         if not thread_id:
-            activity.logger.warning("no thread found for workflow %s — nothing to archive", inp.workflow_id)
+            activity.logger.warning(
+                "no thread found for workflow %s — nothing to archive", inp.workflow_id
+            )
             return
         await self._bot.archive_thread(thread_id)
         thread_store.delete(inp.workflow_id)

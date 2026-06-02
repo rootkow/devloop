@@ -49,14 +49,24 @@ def test_execute_pushes_branch_and_writes_output(origin, tmp_path, monkeypatch):
 
     monkeypatch.setattr(entrypoint, "run_agent", fake_run_agent)
     monkeypatch.setattr(
-        entrypoint, "open_draft_pr",
+        entrypoint,
+        "open_draft_pr",
         lambda *a, **k: "https://github.com/omneval/omneval/pull/5",
     )
 
-    monkeypatch.setenv("TASK_SPEC", json.dumps({
-        "phase": "execute", "project_id": "omneval", "issue_number": 5,
-        "title": "Add feature", "body": "do it", "instructions": "go",
-    }))
+    monkeypatch.setenv(
+        "TASK_SPEC",
+        json.dumps(
+            {
+                "phase": "execute",
+                "project_id": "omneval",
+                "issue_number": 5,
+                "title": "Add feature",
+                "body": "do it",
+                "instructions": "go",
+            }
+        ),
+    )
     monkeypatch.setenv("GITHUB_URL", str(origin))
     monkeypatch.setenv("DEFAULT_BRANCH", "main")
     monkeypatch.setenv("WORKDIR", str(workdir))
@@ -69,8 +79,10 @@ def test_execute_pushes_branch_and_writes_output(origin, tmp_path, monkeypatch):
 
     # the branch was pushed to origin
     branches = subprocess.run(
-        ["git", "branch", "--list", "agent/issue-5"], cwd=origin,
-        capture_output=True, text=True,
+        ["git", "branch", "--list", "agent/issue-5"],
+        cwd=origin,
+        capture_output=True,
+        text=True,
     ).stdout
     assert "agent/issue-5" in branches
 
@@ -94,10 +106,16 @@ def test_plan_phase_parses_plan_block(origin, tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(entrypoint, "run_agent", fake_run_agent)
-    monkeypatch.setenv("TASK_SPEC", json.dumps({
-        "phase": "plan", "project_id": "omneval",
-        "extra": {"agent_label": "agent-ready", "feedback": ""},
-    }))
+    monkeypatch.setenv(
+        "TASK_SPEC",
+        json.dumps(
+            {
+                "phase": "plan",
+                "project_id": "omneval",
+                "extra": {"agent_label": "agent-ready", "feedback": ""},
+            }
+        ),
+    )
     monkeypatch.setenv("GITHUB_URL", str(origin))
     monkeypatch.setenv("DEFAULT_BRANCH", "main")
     monkeypatch.setenv("WORKDIR", str(workdir))
@@ -117,8 +135,11 @@ def test_build_agent_message_renders_bundled_prompt(monkeypatch):
     prompts_dir = Path(__file__).parent / "prompts"
     monkeypatch.setenv("AGENT_PROMPTS_DIR", str(prompts_dir))
     spec = entrypoint.TaskSpec(
-        phase="execute", project_id="omneval", issue_number=42,
-        title="Fix auth", branch="agent/issue-42",
+        phase="execute",
+        project_id="omneval",
+        issue_number=42,
+        title="Fix auth",
+        branch="agent/issue-42",
     )
     msg = entrypoint.build_agent_message(spec)
     assert "Fix issue 42: Fix auth" in msg
@@ -128,7 +149,7 @@ def test_build_agent_message_renders_bundled_prompt(monkeypatch):
 
 def test_extract_plan_handles_missing_block():
     assert entrypoint._extract_plan("no plan here") is None
-    assert entrypoint._extract_plan("<plan>{\"issues\": []}</plan>") == {"issues": []}
+    assert entrypoint._extract_plan('<plan>{"issues": []}</plan>') == {"issues": []}
 
 
 def test_extract_review_parses_block():
@@ -168,9 +189,17 @@ def test_stub_mode_round_trip(origin, tmp_path, monkeypatch):
     out_file = tmp_path / "out.json"
     monkeypatch.setattr(entrypoint, "open_draft_pr", lambda *a, **k: "pr://stub")
     monkeypatch.setenv("AGENT_STUB", "1")
-    monkeypatch.setenv("TASK_SPEC", json.dumps({
-        "phase": "execute", "project_id": "omneval", "issue_number": 7, "title": "x",
-    }))
+    monkeypatch.setenv(
+        "TASK_SPEC",
+        json.dumps(
+            {
+                "phase": "execute",
+                "project_id": "omneval",
+                "issue_number": 7,
+                "title": "x",
+            }
+        ),
+    )
     monkeypatch.setenv("GITHUB_URL", str(origin))
     monkeypatch.setenv("DEFAULT_BRANCH", "main")
     monkeypatch.setenv("WORKDIR", str(workdir))
