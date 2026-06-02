@@ -2,5 +2,9 @@ apiVersion: v2
 name: devloop
 description: Helm chart for deploying the devloop components (Temporal Orchestration Worker, Discord Bot, GitHub Issue Poller)
 type: application
-version: 0.2.0
-appVersion: "0.1.0"
+# Placeholder only. The release pipeline (release.yml) packages the chart with
+# --version/--app-version set to the git tag, so the PUBLISHED chart semver always
+# matches the SDK and image releases. This static value is used solely by PR lint
+# and local `helm template`; it is never what gets pushed to the OCI registry.
+version: 0.0.0
+appVersion: "0.0.0"
