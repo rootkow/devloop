@@ -98,7 +98,10 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
-          version: v3.14.0
+          # Pinned to the Helm 4 line used for local development and the chart
+          # PR checks (publish-devloop-chart.yml), so packaging/lint behaviour is
+          # consistent across dev, PR CI, and release.
+          version: v4.2.0
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
