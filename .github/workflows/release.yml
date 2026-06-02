@@ -50,7 +50,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          version: "0.9.11"
+          version: "0.11.18"
 
       - name: Install dependencies
         run: uv sync --all-groups
@@ -87,7 +87,7 @@ jobs:
 
   chart:
     name: Package and push Helm chart
-    needs: test
+    needs: [test, meta]
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -109,8 +109,15 @@ jobs:
 
       - name: Package chart
         id: package
+        # The git tag is the single source of truth (see header): override the
+        # placeholder version in Chart.yaml so the chart publishes at the same
+        # semver as the SDK and images. Without --version, helm reads Chart.yaml
+        # and a v0.0.2 tag would publish e.g. chart 0.1.0 — out of step with the
+        # 0.0.2 images.
         run: |
-          helm package charts/devloop/ -u -d .cr-release-packages
+          helm package charts/devloop/ -u -d .cr-release-packages \
+            --version "${{ needs.meta.outputs.version }}" \
+            --app-version "${{ needs.meta.outputs.version }}"
           echo "chart=$(ls .cr-release-packages/devloop-*.tgz)" >> "$GITHUB_OUTPUT"
 
       - name: Lint chart
