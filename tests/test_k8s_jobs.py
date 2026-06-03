@@ -396,7 +396,9 @@ def _job_env_names(d=None, job_name="agent-omneval-execute-42-a1"):
     if d is None:
         d = _dispatch_input()
     manifest = k8s_jobs.render_job(d, job_name)
-    return {e["name"] for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]}
+    return {
+        e["name"] for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
 
 
 def test_render_job_injects_skills_enabled_for_named_phase(monkeypatch):

@@ -619,7 +619,9 @@ def run_agent(spec: TaskSpec, workdir: str, tracer) -> AgentOutcome:
         try:
             resolved, skipped = _skills_mod.resolve_skills(spec.phase, _allowlist)
         except Exception as _exc:  # noqa: BLE001 — skill errors must not block the phase
-            log.warning("skills resolution failed (continuing without skills): %s", _exc)
+            log.warning(
+                "skills resolution failed (continuing without skills): %s", _exc
+            )
             skipped = [{"name": "", "reason": f"loader error: {_exc}"}]
 
         if skipped:

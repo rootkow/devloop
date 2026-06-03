@@ -90,6 +90,7 @@ def test_data_helper_tolerates_dict_and_object():
 # AGENTS_NAMESPACE (issue #33) — env var respected at module import time
 # --------------------------------------------------------------------------- #
 
+
 @pytest.fixture
 def _reload_cluster():
     """Reload the cluster module before and after the test to ensure NAMESPACE

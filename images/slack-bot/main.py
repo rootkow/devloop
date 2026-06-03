@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from devloop.messaging.slack_bot import BotClient, SlackActivities, create_bot
+from devloop.messaging.slack_bot import SlackActivities, create_bot
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,9 +61,7 @@ async def main() -> None:
     temporal_client = await Client.connect(TEMPORAL_HOST)
     log.info("connected to temporal at %s", TEMPORAL_HOST)
 
-    bot, handler = create_bot(
-        SLACK_BOT_TOKEN, SLACK_APP_TOKEN, temporal_client
-    )
+    bot, handler = create_bot(SLACK_BOT_TOKEN, SLACK_APP_TOKEN, temporal_client)
     activities = SlackActivities(bot)
 
     worker = Worker(

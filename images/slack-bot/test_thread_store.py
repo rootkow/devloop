@@ -119,9 +119,7 @@ def test_reply_on_pre_restart_thread_signals_correct_workflow(monkeypatch):
     _patch_v1(monkeypatch, second_client)
 
     resolved = thread_store.get_workflow("C0ABC:1677536646.000500")
-    assert resolved == "wf-phase-gate", (
-        f"Expected 'wf-phase-gate', got {resolved!r}"
-    )
+    assert resolved == "wf-phase-gate", f"Expected 'wf-phase-gate', got {resolved!r}"
 
 
 # ---------------------------------------------------------------------------

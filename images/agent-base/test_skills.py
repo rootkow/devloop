@@ -13,9 +13,7 @@ from __future__ import annotations
 
 from collections import namedtuple
 from pathlib import Path
-from typing import Any
 
-import pytest
 
 # ---- Minimal Skill stand-in (tests don't need the real SDK object) ----------
 FakeSkill = namedtuple("FakeSkill", ["name", "content"])
@@ -23,7 +21,8 @@ FakeSkill = namedtuple("FakeSkill", ["name", "content"])
 
 # ---- Helper: import-under-test regardless of cwd ---------------------------
 def _import_skills():
-    import importlib, sys
+    import importlib
+    import sys
 
     # The module lives next to the test file; ensure it's importable.
     parent = str(Path(__file__).parent)

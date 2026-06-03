@@ -79,7 +79,9 @@ class ConfigMapThreadStore:
 
     # -- public API ---------------------------------------------------------
 
-    def put(self, workflow_id: str, thread_id: str, reverse_key: str | None = None) -> None:
+    def put(
+        self, workflow_id: str, thread_id: str, reverse_key: str | None = None
+    ) -> None:
         """Store the mapping *workflow_id → thread_id*.
 
         *reverse_key* overrides the key used for the reverse (thread→workflow)
@@ -175,7 +177,9 @@ class ConfigMapThreadStore:
                 if resource_version is None:
                     api.create_namespaced_config_map(self._namespace, new_cm)
                 else:
-                    api.replace_namespaced_config_map(self._name, self._namespace, new_cm)
+                    api.replace_namespaced_config_map(
+                        self._name, self._namespace, new_cm
+                    )
                 return
             except k8s_client.ApiException as exc:
                 if exc.status == 409 and attempt < 4:

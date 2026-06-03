@@ -169,9 +169,7 @@ class AlertResponseWorkflow:
         self._consumed += 1
         return reply
 
-    async def _dispatch_diagnosis(
-        self, inp: AlertResponseInput
-    ) -> AgentJobResult:
+    async def _dispatch_diagnosis(self, inp: AlertResponseInput) -> AgentJobResult:
         """Run the diagnosis Agent Job and return its result."""
         return await workflow.execute_activity(
             "dispatch_agent_job",
@@ -235,9 +233,7 @@ class AlertResponseWorkflow:
                     else None
                 )
             if answer is None:
-                answer = (
-                    "No human reply within the timeout — proceed with best guess."
-                )
+                answer = "No human reply within the timeout — proceed with best guess."
                 await self._notify(
                     f"⏱️ [{inp.alert_name}] no reply — proceeding with best guess."
                 )

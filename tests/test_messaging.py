@@ -21,6 +21,7 @@ from devloop.messaging import (
 # Protocol conformance: StubPlatform satisfies MessagingPlatform
 # --------------------------------------------------------------------------- #
 
+
 def test_stub_platform_is_a_messaging_platform():
     """A minimal stub implementation should satisfy the MessagingPlatform
     protocol so consumers can verify conformance at runtime."""
@@ -48,6 +49,7 @@ def test_stub_archive_thread_succeeds():
 # --------------------------------------------------------------------------- #
 # MessagingActivities wraps any MessagingPlatform
 # --------------------------------------------------------------------------- #
+
 
 def test_messaging_activities_exposes_send_message():
     """The activity wrapper should expose the three core Temporal activities."""
@@ -96,6 +98,7 @@ def test_archive_thread_activity_calls_archive():
 # Activity signatures round-trip correctly
 # --------------------------------------------------------------------------- #
 
+
 def test_send_message_input_roundtrip():
     """Activity input dataclasses carry the expected fields."""
     inp = SendMessageInput(
@@ -130,6 +133,7 @@ def test_archive_thread_input_roundtrip():
 # StubPlatform records calls for verification
 # --------------------------------------------------------------------------- #
 
+
 def test_stub_records_open_thread_calls():
     stub = StubPlatform()
     stub.open_thread("channel-1", "name", "msg")
@@ -159,6 +163,7 @@ def test_stub_records_archive_thread_calls():
 # DiscordActivities: @activity.defn decorators present
 # --------------------------------------------------------------------------- #
 
+
 def _import_discord_activities():
     """Import DiscordActivities with the discord package stubbed out."""
     import sys
@@ -171,6 +176,7 @@ def _import_discord_activities():
     with patch.dict(sys.modules, {"discord": discord_mock}):
         sys.modules.pop("devloop.messaging.discord_bot", None)
         from devloop.messaging.discord_bot import DiscordActivities
+
         sys.modules.pop("devloop.messaging.discord_bot", None)
     return DiscordActivities
 
@@ -195,6 +201,7 @@ def test_discord_activities_have_activity_defn():
 # SlackActivities: thread store is written and read correctly
 # --------------------------------------------------------------------------- #
 
+
 def _make_slack_activities():
     """Import SlackActivities with slack_bolt stubbed out.
 
@@ -212,6 +219,7 @@ def _make_slack_activities():
     with patch.dict(sys.modules, mocks):
         sys.modules.pop("devloop.messaging.slack_bot", None)
         from devloop.messaging.slack_bot import SlackActivities
+
         sys.modules.pop("devloop.messaging.slack_bot", None)
     return SlackActivities
 
@@ -275,9 +283,7 @@ def test_slack_activities_restores_thread_from_store_on_cache_miss():
 
     # Must reuse the existing thread, not open a new one
     bot.open_thread.assert_not_called()
-    bot.post_to_thread.assert_called_once_with(
-        "C123:1700000000.000100", "follow-up"
-    )
+    bot.post_to_thread.assert_called_once_with("C123:1700000000.000100", "follow-up")
     assert result.thread_id == "C123:1700000000.000100"
 
 
@@ -297,8 +303,12 @@ def test_slack_activities_archive_deletes_from_store():
 
     acts = SlackActivities(bot, thread_store=store)
     acts.send_message(
-        SendMessageInput(workflow_id="wf-slack-002", message="hi",
-                         channel="approvals", thread_name="")
+        SendMessageInput(
+            workflow_id="wf-slack-002",
+            message="hi",
+            channel="approvals",
+            thread_name="",
+        )
     )
     acts.archive_thread(ArchiveThreadInput(workflow_id="wf-slack-002"))
 

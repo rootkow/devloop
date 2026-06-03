@@ -237,7 +237,9 @@ def test_worker_registers_both_in_workflows_list():
     assert wf_match, "worker.py should define a WORKFLOWS list"
     wf_block = wf_match.group(1)
     assert "DevLoopWorkflow" in wf_block, "WORKFLOWS should include DevLoopWorkflow"
-    assert "AlertResponseWorkflow" in wf_block, "WORKFLOWS should include AlertResponseWorkflow"
+    assert "AlertResponseWorkflow" in wf_block, (
+        "WORKFLOWS should include AlertResponseWorkflow"
+    )
 
 
 # --------------------------------------------------------------------------- #

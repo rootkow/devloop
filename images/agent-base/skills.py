@@ -75,7 +75,10 @@ def format_skipped_notice(skipped: list[dict]) -> str:
     """
     if not skipped:
         return ""
-    parts = [f"{s['name']} ({s['reason']})" if s["name"] else f"(unnamed: {s['reason']})" for s in skipped]
+    parts = [
+        f"{s['name']} ({s['reason']})" if s["name"] else f"(unnamed: {s['reason']})"
+        for s in skipped
+    ]
     n = len(skipped)
     return f"⚠ {n} skill(s) not loaded: {', '.join(parts)}"
 
@@ -146,10 +149,12 @@ def resolve_skills(
                 if skill.name in permitted_set:
                     resolved.append(skill)
                 else:
-                    skipped.append({
-                        "name": skill.name,
-                        "reason": f"not in allowlist for phase {phase!r}",
-                    })
+                    skipped.append(
+                        {
+                            "name": skill.name,
+                            "reason": f"not in allowlist for phase {phase!r}",
+                        }
+                    )
                     log.debug(
                         "skill %r not in allowlist for phase %r — skipping",
                         skill.name,
@@ -194,7 +199,9 @@ def install_configmap_skills(staging_path: str) -> list[str]:
     """
     staging = Path(staging_path)
     if not staging.is_dir():
-        log.debug("staging path %s does not exist or is not a directory — skipping", staging)
+        log.debug(
+            "staging path %s does not exist or is not a directory — skipping", staging
+        )
         return []
 
     skills_dir_env = os.environ.get("AGENT_SKILLS_DIR")

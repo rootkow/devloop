@@ -14,7 +14,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 # Ensure src/devloop is importable
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -26,7 +25,6 @@ from devloop.messaging import (
     SendMessageInput,
     SendMessageOutput,
     SendNotificationInput,
-    StubPlatform,
 )
 
 

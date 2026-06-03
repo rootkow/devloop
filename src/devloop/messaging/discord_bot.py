@@ -22,7 +22,6 @@ from temporalio.client import Client
 
 from devloop.messaging.core import (
     ArchiveThreadInput,
-    MessagingActivities,
     SendMessageInput,
     SendMessageOutput,
     SendNotificationInput,
@@ -213,9 +212,7 @@ class DiscordActivities:
             await self._bot.post_to_thread(thread_id, inp.message)
         else:
             # Fallback: open a new thread for notifications with no prior thread
-            thread = await self._bot.open_thread(
-                "alerts", inp.workflow_id, inp.message
-            )
+            thread = await self._bot.open_thread("alerts", inp.workflow_id, inp.message)
             thread_id = str(thread.id)
             self._threads[inp.workflow_id] = thread_id
             self._store.put(inp.workflow_id, thread_id)
