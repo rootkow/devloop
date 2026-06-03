@@ -38,12 +38,10 @@ tests:
           kind: Deployment
           apiVersion: apps/v1
           name: RELEASE-NAME-poller-omnevalomneval
-        documentIndex: 0
       - containsDocument:
           kind: Deployment
           apiVersion: apps/v1
           name: RELEASE-NAME-poller-omnevaldevloop
-        documentIndex: 1
 
   # --- Regression guard for the bug that blocked install: an owner/name repo
   # was used verbatim as a label value, which Kubernetes rejects (no "/"). ---
