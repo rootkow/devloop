@@ -17,6 +17,7 @@ import logging
 import os
 
 import discord
+from temporalio import activity
 from temporalio.client import Client
 
 from devloop.messaging.core import (
@@ -169,16 +170,23 @@ class DiscordActivities:
     provides its own async implementations tailored to Discord's API.
     """
 
-    def __init__(self, bot: BotClient) -> None:
+    def __init__(
+        self,
+        bot: BotClient,
+        thread_store: ConfigMapThreadStore | None = None,
+    ) -> None:
         self._bot = bot
+        self._store = thread_store if thread_store is not None else _thread_store
         self._threads: dict[str, str] = {}
 
+    @activity.defn(name="send_message")
     async def send_message(self, inp: SendMessageInput) -> SendMessageOutput:
-        # Reuse existing thread for this workflow, or open a new one
+        # Restore from durable store on cache miss (e.g. after pod restart)
         thread_id = self._threads.get(inp.workflow_id)
         if thread_id is None:
-            thread_id = _thread_store.get_thread(inp.workflow_id)
-            self._threads[inp.workflow_id] = thread_id
+            thread_id = self._store.get_thread(inp.workflow_id)
+            if thread_id is not None:
+                self._threads[inp.workflow_id] = thread_id
 
         if thread_id is not None:
             await self._bot.post_to_thread(thread_id, inp.message)
@@ -188,14 +196,18 @@ class DiscordActivities:
             )
             thread_id = str(thread.id)
             self._threads[inp.workflow_id] = thread_id
-            _thread_store.put(inp.workflow_id, thread_id)
+            self._store.put(inp.workflow_id, thread_id)
 
         return SendMessageOutput(thread_id=thread_id)
 
+    @activity.defn(name="send_notification")
     async def send_notification(self, inp: SendNotificationInput) -> None:
+        # Restore from durable store on cache miss
         thread_id = self._threads.get(inp.workflow_id)
         if thread_id is None:
-            thread_id = _thread_store.get_thread(inp.workflow_id)
+            thread_id = self._store.get_thread(inp.workflow_id)
+            if thread_id is not None:
+                self._threads[inp.workflow_id] = thread_id
 
         if thread_id is not None:
             await self._bot.post_to_thread(thread_id, inp.message)
@@ -206,13 +218,14 @@ class DiscordActivities:
             )
             thread_id = str(thread.id)
             self._threads[inp.workflow_id] = thread_id
-            _thread_store.put(inp.workflow_id, thread_id)
+            self._store.put(inp.workflow_id, thread_id)
 
+    @activity.defn(name="archive_thread")
     async def archive_thread(self, inp: ArchiveThreadInput) -> None:
         thread_id = self._threads.pop(inp.workflow_id, None)
         if thread_id is None:
-            thread_id = _thread_store.get_thread(inp.workflow_id)
+            thread_id = self._store.get_thread(inp.workflow_id)
         if thread_id is None:
             return
         await self._bot.archive_thread(thread_id)
-        _thread_store.delete(inp.workflow_id)
+        self._store.delete(inp.workflow_id)

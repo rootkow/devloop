@@ -104,6 +104,10 @@ class BotClient:
         self._app = app
         self._temporal = temporal_client
 
+    @property
+    def app(self) -> SlackApp:
+        return self._app
+
     # ------------------------------------------------------------------
     # MessagingPlatform protocol (synchronous — Slack WebClient is sync)
     # ------------------------------------------------------------------
@@ -166,6 +170,7 @@ class BotClient:
             if not thread_ts:
                 return
 
+            # Reverse lookup uses thread_ts alone (not the composite channel:ts).
             workflow_id = _thread_store.get_workflow(thread_ts)
             if not workflow_id:
                 return
@@ -179,8 +184,16 @@ class BotClient:
             )
             handle = self.get_workflow_handle(workflow_id)
             loop = asyncio.new_event_loop()
-            loop.run_until_complete(handle.signal("human_reply", reply_text))
-            loop.close()
+            try:
+                loop.run_until_complete(handle.signal("human_reply", reply_text))
+            except Exception:
+                log.exception(
+                    "failed to signal workflow %s with reply from %s",
+                    workflow_id,
+                    message.get("user", "unknown"),
+                )
+            finally:
+                loop.close()
 
 
 def create_bot(
@@ -209,7 +222,7 @@ def create_bot_with_app(
     Use this variant when you need access to the underlying bolt app.
     """
     bot, handler = create_bot(slack_bot_token, slack_app_token, temporal_client)
-    return bot, bot._app, handler
+    return bot, bot.app, handler
 
 
 # --------------------------------------------------------------------------- #
@@ -222,22 +235,54 @@ class SlackActivities:
 
     Inherits the data contract types from the core ``MessagingActivities``
     wrapper but uses Slack-specific I/O.
+
+    Thread mappings are persisted in the durable store so they survive pod
+    restarts.  The reverse lookup key stored in the ConfigMap is the bare
+    ``thread_ts`` (not the composite ``channel:thread_ts``) so that
+    ``handle_message`` can resolve replies using only the ``thread_ts`` field
+    from the Slack event payload.
     """
 
-    def __init__(self, bot: BotClient) -> None:
+    def __init__(
+        self,
+        bot: BotClient,
+        thread_store: ConfigMapThreadStore | None = None,
+    ) -> None:
         self._messaging = MessagingActivities(platform=bot)
+        self._store = thread_store if thread_store is not None else _thread_store
+
+    def _restore_thread_if_needed(self, workflow_id: str) -> None:
+        """Warm the in-memory thread map from the durable store on cache miss.
+
+        Called before each activity so that a pod restart doesn't cause a new
+        thread to be opened for an already-active workflow.
+        """
+        if workflow_id not in self._messaging._thread_map:
+            stored = self._store.get_thread(workflow_id)
+            if stored:
+                self._messaging._thread_map[workflow_id] = stored
 
     @activity.defn(name="send_message")
     def send_message(self, inp: SendMessageInput) -> SendMessageOutput:
         """Open (or reuse) a Slack thread, post a message, and store the mapping."""
-        return self._messaging.send_message_sync(inp)
+        self._restore_thread_if_needed(inp.workflow_id)
+        result = self._messaging.send_message_sync(inp)
+        # Persist the mapping so handle_message can route replies and so the
+        # mapping survives a pod restart.  The reverse key is thread_ts alone
+        # (not the composite) because that's what Slack events carry.
+        _, thread_ts = _parse_composite(result.thread_id)
+        self._store.put(inp.workflow_id, result.thread_id, reverse_key=thread_ts)
+        return result
 
     @activity.defn(name="send_notification")
     def send_notification(self, inp: SendNotificationInput) -> None:
         """Post a message to the workflow's thread without expecting a reply."""
+        self._restore_thread_if_needed(inp.workflow_id)
         self._messaging.send_notification_sync(inp)
 
     @activity.defn(name="archive_thread")
     def archive_thread(self, inp: ArchiveThreadInput) -> None:
         """Close the Slack thread for a completed workflow."""
+        self._restore_thread_if_needed(inp.workflow_id)
         self._messaging.archive_thread_sync(inp)
+        self._store.delete(inp.workflow_id)
