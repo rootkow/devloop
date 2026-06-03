@@ -12,12 +12,6 @@ import os
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-from devloop.messaging import (
-    ArchiveThreadInput,
-    SendMessageInput,
-    SendMessageOutput,
-    SendNotificationInput,
-)
 
 # Task queues — override via env vars to match helm chart values.
 # MESSAGING_TASK_QUEUE is the queue name for whichever messaging platform bot is
