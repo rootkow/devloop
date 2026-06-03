@@ -122,7 +122,7 @@ def test_explicit_allowlist_returns_named_skills_only():
         _loader=lambda installed_dir: loader_skills,
     )
     assert [s.name for s in resolved] == ["alpha"]
-    assert "beta" in skipped
+    assert any(s["name"] == "beta" for s in skipped)
 
 
 def test_allowlist_name_not_installed_is_ignored():
@@ -163,7 +163,7 @@ def test_unnamed_skill_is_skipped_and_reported():
     assert [s.name for s in resolved] == ["good-skill"]
     # skipped report should mention the malformed entry
     assert len(skipped) == 1
-    assert "unnamed" in skipped[0].lower() or skipped[0] == ""
+    assert "malformed" in skipped[0]["reason"].lower()
 
 
 def test_multiple_malformed_skills_all_skipped():
