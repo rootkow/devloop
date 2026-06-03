@@ -168,6 +168,12 @@ def resolve_skills(
 def install_configmap_skills(staging_path: str) -> list[str]:
     """Install skills from a ConfigMap staging directory into the convergence dir.
 
+    Stage-and-install design (ADR-0008): the ConfigMap is mounted at a separate
+    read-only staging path rather than directly at the convergence directory.
+    Mounting a Kubernetes volume at the convergence directory would replace its
+    contents and hide every baked skill — stage-and-install avoids this while
+    letting ConfigMap-delivered skills override baked skills by name.
+
     Each key in the ConfigMap is a skill name; the value is the ``SKILL.md``
     content.  The staging directory contains one file per skill (the file name
     is the skill name); each file is written as

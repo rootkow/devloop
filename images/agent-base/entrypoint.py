@@ -529,7 +529,7 @@ class AgentOutcome:
 
 
 def build_agent(llm, cli_mode: bool = True, agent_context=None):
-    """Construct an Agent using the default preset (issue #32).
+    """Construct an Agent using the default preset (issue #32, ADR-0007).
 
     Replicates ``get_default_agent(llm, cli_mode)`` — wiring terminal,
     file_editor, task_tracker tools and the LLM-summarising condenser — and
@@ -539,6 +539,18 @@ def build_agent(llm, cli_mode: bool = True, agent_context=None):
     ``agent_context=None`` is the no-op path: the agent is built exactly as
     before issue #32, so existing behaviour is preserved when no skills are
     loaded.
+
+    WHY hand-rolled instead of ``get_default_agent``?
+    ``get_default_agent`` does not accept ``agent_context`` — there is no
+    supported path to skills injection through it.  See ADR-0007.
+
+    OVERRIDE SEAM: derived images can replace this function (``_base.build_agent
+    = my_build_agent``) to inject custom tools, a different condenser, or a
+    modified ``AgentContext`` without touching the rest of the entrypoint.
+    See ``images/agent-base/SKILLS.md`` for an example.
+
+    DO NOT replace this with a ``get_default_agent`` call — that would silently
+    drop skills support.
     """
     from openhands.sdk import Agent
     from openhands.tools.preset.default import get_default_condenser, get_default_tools
