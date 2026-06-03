@@ -498,15 +498,46 @@ class AgentOutcome:
     structured: dict | None = None  # review/diagnosis JSON
 
 
+def build_agent(llm, cli_mode: bool = True, agent_context=None):
+    """Construct an Agent using the default preset (issue #32).
+
+    Replicates ``get_default_agent(llm, cli_mode)`` — wiring terminal,
+    file_editor, task_tracker tools and the LLM-summarising condenser — and
+    adds ``agent_context`` to the ``Agent(...)`` constructor so installed
+    skills are injected when provided.
+
+    ``agent_context=None`` is the no-op path: the agent is built exactly as
+    before issue #32, so existing behaviour is preserved when no skills are
+    loaded.
+    """
+    from openhands.sdk import Agent
+    from openhands.tools.preset.default import get_default_condenser, get_default_tools
+
+    tools = get_default_tools(enable_browser=not cli_mode)
+    condenser = get_default_condenser(
+        llm=llm.model_copy(update={"usage_id": "condenser"})
+    )
+    return Agent(
+        llm=llm,
+        tools=tools,
+        system_prompt_kwargs={"cli_mode": cli_mode},
+        condenser=condenser,
+        agent_context=agent_context,
+    )
+
+
 def run_agent(spec: TaskSpec, workdir: str, tracer) -> AgentOutcome:
     """Drive an OpenHands LocalConversation over the cloned workspace.
 
     Stub mode (AGENT_STUB=1) returns a fixed success without invoking the model
     — used to prove the dispatch→poll→ConfigMap round-trip (issue #18).
 
-    Real mode uses the openhands-ai 1.7.0 API:
+    Real mode uses the openhands-sdk 1.24.0 API:
         LLM(model, base_url, api_key)
-        → Agent(llm=llm)
+        → build_agent(llm=llm, cli_mode=True, agent_context=None)
+          (hand-rolled preset: terminal + file_editor + task_tracker tools;
+          cli_mode drops the Chromium-only browser tool; agent_context carries
+          installed skills when provided — None is the no-op path)
         → LocalConversation(agent=agent, workspace=workdir)
         → send_message → run → get_agent_final_response(state.events)
 
@@ -522,7 +553,6 @@ def run_agent(spec: TaskSpec, workdir: str, tracer) -> AgentOutcome:
     # (existing integration tests mock run_agent directly).
     from openhands.sdk import LLM, LocalConversation
     from openhands.sdk.conversation import get_agent_final_response
-    from openhands.tools.preset.default import get_default_agent
 
     message = build_agent_message(spec)
     try:
@@ -532,13 +562,9 @@ def run_agent(spec: TaskSpec, workdir: str, tracer) -> AgentOutcome:
                 base_url=os.getenv("AGENT_LLM_BASE_URL", "http://192.168.68.104/v1"),
                 api_key=os.getenv("AGENT_LLM_API_KEY", "local"),
             )
-            # Build the agent WITH its execution tools. A bare ``Agent(llm=llm)``
-            # ships only Think/Finish — no terminal, file editor, or task tracker
-            # — so every phase silently produced empty output (the planner "found
-            # no issues", the implementer made no commits). ``get_default_agent``
-            # wires in terminal + file_editor + task_tracker; ``cli_mode=True``
-            # drops the browser tool, which needs Chromium (not in the image).
-            agent = get_default_agent(llm=llm, cli_mode=True)
+            # Build the agent WITH its execution tools and skills context.
+            # agent_context=None is the no-op path (no installed skills).
+            agent = build_agent(llm=llm, cli_mode=True, agent_context=None)
             conversation = LocalConversation(agent=agent, workspace=workdir)
             conversation.send_message(message)
             conversation.run()
