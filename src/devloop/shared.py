@@ -214,3 +214,32 @@ class AwaitInput:
 
     job_name: str
     poll_interval_seconds: float = 5.0
+
+
+# ---------------------------------------------------------------------------
+# Messaging activity I/O
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SendMessageInput:
+    workflow_id: str
+    message: str
+    channel: str = "approvals"
+    thread_name: str = ""
+
+
+@dataclass
+class SendMessageOutput:
+    thread_id: str
+
+
+@dataclass
+class SendNotificationInput:
+    workflow_id: str
+    message: str
+
+
+@dataclass
+class ArchiveThreadInput:
+    workflow_id: str
