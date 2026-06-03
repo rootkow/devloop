@@ -27,3 +27,8 @@ py-modules = []
 # uv project commands (uv run) install dependencies but do not build this app.
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
