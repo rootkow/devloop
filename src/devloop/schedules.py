@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 
 from temporalio.client import (
@@ -17,6 +18,8 @@ from temporalio.client import (
     ScheduleSpec,
     ScheduleCalendarSpec,
     ScheduleRange,
+    ScheduleUpdate,
+    ScheduleUpdateInput,
 )
 
 from .projects import ProjectConfig
@@ -26,11 +29,37 @@ log = logging.getLogger(__name__)
 
 
 async def _ensure(client: Client, schedule_id: str, schedule: Schedule) -> None:
+    """Create the schedule, or update an existing one to match ``schedule``.
+
+    ``ensure_schedules`` runs on every worker startup, so updating in place is
+    how config changes propagate to the nightly sweep — e.g. a changed gate
+    timeout in the workflow input (DevLoopInput.from_env) or a changed cron spec.
+    Without this, the first create would win forever and later config edits would
+    silently never reach the schedule.
+
+    Code owns the action, spec, and policy; the operator owns runtime state, so
+    whether the schedule is paused, its note, and any remaining-action limit are
+    read from the live schedule and carried across the update unchanged (a worker
+    restart must not silently un-pause a schedule an operator paused).
+    """
     try:
         await client.create_schedule(schedule_id, schedule)
         log.info("created schedule %s", schedule_id)
+        return
     except ScheduleAlreadyRunningError:
-        log.info("schedule %s already exists", schedule_id)
+        pass
+
+    def _apply_desired(inp: ScheduleUpdateInput) -> ScheduleUpdate:
+        # Pure: the SDK may invoke this multiple times in a conflict-resolution
+        # loop. Overwrite everything from the freshly-built ``schedule`` except
+        # the operator-controlled runtime state.
+        refreshed = dataclasses.replace(
+            schedule, state=inp.description.schedule.state
+        )
+        return ScheduleUpdate(schedule=refreshed)
+
+    await client.get_schedule_handle(schedule_id).update(_apply_desired)
+    log.info("updated schedule %s", schedule_id)
 
 
 async def ensure_schedules(client: Client, projects: list[ProjectConfig]) -> None:
@@ -44,7 +73,7 @@ async def ensure_schedules(client: Client, projects: list[ProjectConfig]) -> Non
             Schedule(
                 action=ScheduleActionStartWorkflow(
                     "DevLoopWorkflow",
-                    DevLoopInput(project_id=p.id, agent_label=p.agent_label),
+                    DevLoopInput.from_env(p.id, p.agent_label),
                     id=f"devloop-nightly-{p.id}",
                     task_queue=ORCHESTRATION_QUEUE,
                 ),

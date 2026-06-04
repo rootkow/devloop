@@ -495,3 +495,43 @@ def test_thread_store_reverse_key_override(store):
     assert s.get_thread("wf-slack") == "C123:1700000000.000100"
     assert s.get_workflow("1700000000.000100") == "wf-slack"
     assert s.get_workflow("C123:1700000000.000100") is None
+
+
+# Every test above monkeypatches _v1 wholesale, so its body — where the kube
+# client is loaded — is never exercised. These two call the real _v1(): they
+# regress the bug where it referenced load_incluster_config / ConfigException on
+# kubernetes.client instead of kubernetes.config, raising AttributeError and
+# crashing the discord bot's on_message before it could signal "approve".
+def test_v1_loads_incluster_config_from_kubernetes_config_module(monkeypatch):
+    sentinel = object()
+    called = {}
+    monkeypatch.setattr(_ts_module, "_api", None)
+    monkeypatch.setattr(
+        _ts_module.k8s_config,
+        "load_incluster_config",
+        lambda: called.__setitem__("incluster", True),
+    )
+    monkeypatch.setattr(_ts_module.k8s_client, "CoreV1Api", lambda: sentinel)
+
+    assert _ts_module._v1() is sentinel
+    assert called.get("incluster") is True
+
+
+def test_v1_falls_back_to_kubeconfig_on_configexception(monkeypatch):
+    sentinel = object()
+    calls = []
+
+    def _raise_not_in_cluster():
+        raise _ts_module.k8s_config.ConfigException("not in cluster")
+
+    monkeypatch.setattr(_ts_module, "_api", None)
+    monkeypatch.setattr(
+        _ts_module.k8s_config, "load_incluster_config", _raise_not_in_cluster
+    )
+    monkeypatch.setattr(
+        _ts_module.k8s_config, "load_kube_config", lambda: calls.append("kube")
+    )
+    monkeypatch.setattr(_ts_module.k8s_client, "CoreV1Api", lambda: sentinel)
+
+    assert _ts_module._v1() is sentinel
+    assert calls == ["kube"]

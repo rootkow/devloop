@@ -9,7 +9,7 @@ The multi-phase autonomous workflow for maintaining and improving an enrolled co
 _Avoid_: agent pipeline, CI loop, autonomous CI
 
 **Phase Gate**:
-A Discord-mediated pause in the Dev Loop where the agent posts a structured summary and waits for explicit human approval before advancing to the next phase. Required at Plan→Execute and Review→Merge. Mid-execution blocking questions also constitute a Phase Gate but carry a 4-hour timeout, after which the agent documents its best-guess assumption and continues.
+A Discord-mediated pause in the Dev Loop where the agent posts a structured summary and waits for explicit human approval before advancing to the next phase. Required at Plan→Execute and Review→Merge. All gates carry a [Gate timeout](#gate-timeout): on expiry the Plan gate pauses the run, the Merge gate leaves the PR open and moves on, and a mid-execution blocking question documents its best-guess assumption and continues.
 _Avoid_: approval step, human-in-the-loop checkpoint, Discord prompt
 
 **Planner**:
@@ -71,6 +71,10 @@ _Avoid_: skill keywords, activation conditions, trigger words
 **Selection mode**:
 Controls how eligible skills are presented to the agent within a phase: `"triggers"` (default) surfaces a skill only when the conversation matches its `triggers:` frontmatter; `"advanced"` surfaces all phase-eligible skills so the model selects the most appropriate one autonomously. Configured via the `skillsSelectionMode` Helm value and forwarded to each Agent Execution Job as `AGENT_SKILLS_SELECTION_MODE`.
 _Avoid_: skill discovery mode, skill matching mode
+
+**Gate timeout**:
+The bound on how long a [Phase Gate](#phase-gate) waits for human input before the loop stops blocking, so a forgotten approval cannot park a run forever (which, because the webhook reuses the `devloop-<project>` workflow id, would silently drop every later issue). The plan/merge approval gates use `gate_timeout_seconds` and the mid-run question gate uses `question_timeout_seconds`; both default to 4 hours. Configured via the `temporalWorker.gateTimeoutSeconds` / `temporalWorker.questionTimeoutSeconds` Helm values, forwarded to the Temporal Orchestration Worker as `GATE_TIMEOUT_SECONDS` / `QUESTION_TIMEOUT_SECONDS`, and read by `DevLoopInput.from_env` when a webhook trigger or schedule starts the workflow. Both paths pick up a changed value after a worker restart: label-triggered runs read the environment on the next trigger, and the nightly Temporal Schedule is updated in place by `ensure_schedules` on startup (operator-set pause state and notes are preserved across that update).
+_Avoid_: gate deadline, approval timeout, gate TTL
 
 **Per-phase enablement**:
 Operator-controlled allowlist of skill names available in each Dev Loop phase (plan, execute, review, merge, diagnosis). Configured via the `skillsByPhase` Helm value and propagated to each Agent Execution Job as `AGENT_SKILLS_ENABLED`. Three-way semantics: phase key absent means all installed skills are available; `[]` means no skills for that phase; a name list means exactly those skills are loaded.

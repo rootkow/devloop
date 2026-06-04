@@ -51,15 +51,61 @@ class DevLoopInput:
     max_iterations: int = 30
     # configurable down to seconds for tests
     question_timeout_seconds: float = 14400.0  # 4h mid-run gate
+    # Plan/merge human-approval gates. Without a bound, a forgotten
+    # approval parks the run forever, and because the webhook reuses the
+    # devloop-<project> workflow id (USE_EXISTING), every later issue is then
+    # silently dropped. On timeout the  plan gate pauses the loop and the 
+    # merge gate leaves the PR open and moves on.
+    gate_timeout_seconds: float = 14400.0  # 4h plan/merge approval gate
     replan_max: int = 3
     poll_interval_seconds: float = 5.0
+
+    @classmethod
+    def from_env(
+        cls, project_id: str, agent_label: str = "agent-ready"
+    ) -> "DevLoopInput":
+        """Build an input with the timeout gates sourced from the worker env.
+
+        Called only from the webhook/schedule entry points, which run in the
+        worker process (outside the Temporal workflow sandbox), so reading
+        os.environ here is safe — the resolved values then travel inside the
+        serialized input and the workflow itself never touches the environment.
+
+        ``GATE_TIMEOUT_SECONDS`` / ``QUESTION_TIMEOUT_SECONDS`` are wired by the
+        Helm chart (templates/temporal-worker-deployment.yaml). Each falls back
+        to the dataclass default above, so the Helm value and the Python default
+        stay in sync. A missing or malformed value is tolerated and falls back.
+        """
+        import os
+
+        def _seconds(name: str, default: float) -> float:
+            try:
+                return float(os.environ[name])
+            except (KeyError, ValueError):
+                return default
+
+        return cls(
+            project_id=project_id,
+            agent_label=agent_label,
+            question_timeout_seconds=_seconds(
+                "QUESTION_TIMEOUT_SECONDS", cls.question_timeout_seconds
+            ),
+            gate_timeout_seconds=_seconds(
+                "GATE_TIMEOUT_SECONDS", cls.gate_timeout_seconds
+            ),
+        )
 
 
 @dataclass
 class DevLoopResult:
-    status: str  # completed | failed_plan | failed_merge
+    status: str  # completed | paused | failed_plan | failed_merge
     merged_issues: list[int] = field(default_factory=list)
     detail: str = ""
+
+
+# Sentinel returned by the plan phase when the plan gate times out (distinct from
+# None, which means the plan was actively rejected past replan_max).
+_PLAN_GATE_TIMEOUT = object()
 
 
 _RETRY = RetryPolicy(maximum_attempts=3)
@@ -181,6 +227,10 @@ class DevLoopWorkflow:
 
         for rnd in range(1, inp.max_iterations + 1):
             plan = await self._plan_phase(inp, thread_name, rnd)
+            if plan is _PLAN_GATE_TIMEOUT:
+                return DevLoopResult(
+                    "paused", merged_issues=merged, detail="plan gate timed out"
+                )
             if plan is None:
                 return DevLoopResult(
                     "failed_plan", merged_issues=merged, detail="plan rejected"
@@ -236,8 +286,17 @@ class DevLoopWorkflow:
             await self._say(
                 logic.render_plan(inp.project_id, rnd, issues), thread_name=thread_name
             )
-            reply = await self._await_reply()  # plan gate does NOT time out
-            if reply is not None and logic.is_approval(reply):
+            reply = await self._await_reply(timeout=inp.gate_timeout_seconds)
+            if reply is None:
+                # No approval within the gate window. Pause rather than auto-run
+                # an unreviewed plan; a Closed run lets the next labeled issue
+                # start fresh instead of parking this one forever.
+                await self._notify(
+                    "⏸️ Plan gate timed out with no approval — pausing Dev Loop. "
+                    "Re-label an issue to resume."
+                )
+                return _PLAN_GATE_TIMEOUT
+            if logic.is_approval(reply):
                 return plan
             replans += 1
             if replans > inp.replan_max:
@@ -364,8 +423,17 @@ class DevLoopWorkflow:
             logic.merge_gate_message(issue, exec_result["pr_url"]),
             thread_name=thread_name,
         )
-        reply = await self._await_reply()  # merge gate does NOT time out
-        if not (reply is not None and logic.is_approval(reply)):
+        reply = await self._await_reply(timeout=inp.gate_timeout_seconds)
+        if reply is None:
+            # No merge decision within the gate window. Leave the PR open for a
+            # human to merge later and move on; _drop_issues_in_review keeps this
+            # open-PR issue out of future plan rounds so it won't re-prompt.
+            await self._notify(
+                f"⏱️ #{issue_no} merge gate timed out — leaving the PR open "
+                "and moving on to other issues."
+            )
+            return "skipped"
+        if not logic.is_approval(reply):
             await self._notify(f"#{issue_no} not approved for merge — skipping.")
             return "skipped"
 
