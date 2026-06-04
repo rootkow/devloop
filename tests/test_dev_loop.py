@@ -365,6 +365,62 @@ async def test_merge_gate_skip(reset_mocks):
 
 
 @pytest.mark.asyncio
+async def test_merge_gate_timeout_leaves_pr_open_and_moves_on(reset_mocks):
+    """No merge decision within gate_timeout_seconds: the PR is left open, the
+    issue is not merged, and the loop moves on (round 2 plan is empty → done).
+    The merge agent Job is never dispatched."""
+    reset_mocks.plan_rounds = [_one_issue(1)]
+    result = await _env_and_run(
+        DevLoopInput("omneval", gate_timeout_seconds=1),
+        ["approve"],  # plan gate approved; merge gate gets no reply → times out
+    )
+    assert result.status == "completed"
+    assert result.merged_issues == []
+    assert "merge" not in M.dispatched_phases  # never dispatched the merge job
+    assert any(
+        "timed out" in n.lower() and "moving on" in n.lower() for n in M.notifications
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_gate_timeout_pauses(reset_mocks):
+    """No approval within gate_timeout_seconds at the plan gate pauses the loop
+    (status 'paused') without running any unreviewed work."""
+    reset_mocks.plan_rounds = [_one_issue(1)]
+    result = await _env_and_run(
+        DevLoopInput("omneval", gate_timeout_seconds=1),
+        [],  # nobody approves the plan
+    )
+    assert result.status == "paused"
+    assert result.merged_issues == []
+    assert "execute" not in M.dispatched_phases
+    assert any("plan gate timed out" in n.lower() for n in M.notifications)
+
+
+def test_from_env_reads_timeout_overrides(monkeypatch):
+    """The webhook/schedule entry points build the input via from_env, which
+    sources the gate/question timeouts from the worker environment (wired by the
+    Helm chart) and leaves other fields at their dataclass defaults."""
+    monkeypatch.setenv("GATE_TIMEOUT_SECONDS", "600")
+    monkeypatch.setenv("QUESTION_TIMEOUT_SECONDS", "900")
+    inp = DevLoopInput.from_env("omneval", "agent-ready")
+    assert inp.project_id == "omneval"
+    assert inp.agent_label == "agent-ready"
+    assert inp.gate_timeout_seconds == 600.0
+    assert inp.question_timeout_seconds == 900.0
+
+
+def test_from_env_falls_back_to_defaults(monkeypatch):
+    """Missing or malformed env values fall back to the dataclass defaults rather
+    than crashing the webhook/schedule path."""
+    monkeypatch.delenv("GATE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("QUESTION_TIMEOUT_SECONDS", "not-a-number")
+    inp = DevLoopInput.from_env("omneval")
+    assert inp.gate_timeout_seconds == DevLoopInput.gate_timeout_seconds == 14400.0
+    assert inp.question_timeout_seconds == DevLoopInput.question_timeout_seconds
+
+
+@pytest.mark.asyncio
 async def test_merge_failure_terminates(reset_mocks):
     reset_mocks.plan_rounds = [_one_issue(1)]
     reset_mocks.merge_status = JobStatus.FAILED.value

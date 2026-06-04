@@ -18,6 +18,7 @@ import logging
 from typing import Callable
 
 from kubernetes import client as k8s_client
+from kubernetes import config as k8s_config
 
 log = logging.getLogger(__name__)
 
@@ -36,10 +37,14 @@ def _v1() -> k8s_client.CoreV1Api:
     """Return the shared Kubernetes CoreV1Api client, initializing it once."""
     global _api
     if _api is None:
+        # load_incluster_config / ConfigException live on kubernetes.config, NOT
+        # kubernetes.client — referencing them via the client module raised
+        # AttributeError, crashing the discord bot's on_message before it could
+        # signal the workflow (so "approve" silently did nothing). Mirrors cluster.py.
         try:
-            k8s_client.config.load_incluster_config()
-        except k8s_client.ConfigException:
-            k8s_client.config.load_kube_config()
+            k8s_config.load_incluster_config()
+        except k8s_config.ConfigException:
+            k8s_config.load_kube_config()
         _api = k8s_client.CoreV1Api()
     return _api
 

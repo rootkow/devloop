@@ -102,4 +102,4 @@ def create_app(client: Client, projects: list[ProjectConfig]) -> FastAPI:
 def _dev_loop_input(project_id: str, agent_label: str):
     from .dev_loop import DevLoopInput
 
-    return DevLoopInput(project_id=project_id, agent_label=agent_label)
+    return DevLoopInput.from_env(project_id, agent_label)
