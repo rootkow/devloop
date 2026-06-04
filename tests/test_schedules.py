@@ -21,6 +21,7 @@ from temporalio.client import (
     ScheduleState,
     ScheduleUpdateInput,
 )
+from temporalio.service import RPCError, RPCStatusCode
 
 from devloop import schedules
 from devloop.dev_loop import DevLoopInput
@@ -42,13 +43,19 @@ def _project(project_id: str = "omneval") -> ProjectConfig:
 
 class _FakeHandle:
     """Captures the updater passed to ``ScheduleHandle.update`` and runs it
-    against a supplied current schedule (mimicking what the server would feed)."""
+    against a supplied current schedule (mimicking what the server would feed).
 
-    def __init__(self, current: Schedule):
+    ``raises`` simulates the ``describe_schedule`` RPC behind ``update`` failing
+    (e.g. a timeout on a slow cluster), exercising the best-effort error path."""
+
+    def __init__(self, current: Schedule, raises: Exception | None = None):
         self._current = current
+        self._raises = raises
         self.applied: Schedule | None = None
 
-    async def update(self, updater):
+    async def update(self, updater, **kwargs):
+        if self._raises is not None:
+            raise self._raises
         result = updater(ScheduleUpdateInput(description=_FakeDescription(self._current)))
         self.applied = result.schedule
 
@@ -62,9 +69,16 @@ class _FakeClient:
     """Records create_schedule calls; create may be configured to raise
     AlreadyRunning so the update path is exercised."""
 
-    def __init__(self, *, already_running: bool = False, current: Schedule | None = None):
+    def __init__(
+        self,
+        *,
+        already_running: bool = False,
+        current: Schedule | None = None,
+        update_raises: Exception | None = None,
+    ):
         self._already_running = already_running
         self._current = current
+        self._update_raises = update_raises
         self.created: list[tuple[str, Schedule]] = []
         self.handles: dict[str, _FakeHandle] = {}
 
@@ -75,7 +89,7 @@ class _FakeClient:
         return schedule_id
 
     def get_schedule_handle(self, schedule_id):
-        handle = _FakeHandle(self._current)
+        handle = _FakeHandle(self._current, raises=self._update_raises)
         self.handles[schedule_id] = handle
         return handle
 
@@ -143,3 +157,43 @@ async def test_ensure_schedules_wires_env_timeout_into_schedule(monkeypatch):
         sched for sid, sched in client.created if sid == "devloop-nightly-omneval"
     )
     assert nightly.action.args[0].gate_timeout_seconds == 600.0
+
+
+@pytest.mark.asyncio
+async def test_ensure_swallows_update_rpc_failure():
+    """A failing ``update`` (e.g. the ``describe_schedule`` RPC behind it timing
+    out on a slow cluster) must not propagate — reconciliation is best-effort and
+    runs on the critical worker-startup path."""
+    client = _FakeClient(
+        already_running=True,
+        current=_desired_schedule(),
+        update_raises=RPCError("Timeout expired", RPCStatusCode.DEADLINE_EXCEEDED, b""),
+    )
+
+    # Must not raise.
+    await schedules._ensure(client, "devloop-nightly-omneval", _desired_schedule())
+
+
+@pytest.mark.asyncio
+async def test_ensure_schedules_survives_reconciliation_timeout():
+    """The worker must boot even when every schedule's reconciliation fails:
+    ``ensure_schedules`` returns normally and still attempts each schedule.
+
+    This is the regression behind the homelab crash — before the fix the RPC
+    timeout propagated out of ``main`` and CrashLooped the worker."""
+    client = _FakeClient(
+        already_running=True,
+        current=_desired_schedule(),
+        update_raises=RPCError("Timeout expired", RPCStatusCode.DEADLINE_EXCEEDED, b""),
+    )
+
+    # Must not raise despite every update timing out.
+    await schedules.ensure_schedules(client, [_project("omneval"), _project("devloop")])
+
+    # Every schedule (nightly + weekly, per project) was still attempted.
+    assert set(client.handles) == {
+        "devloop-nightly-omneval",
+        "summarize-weekly-omneval",
+        "devloop-nightly-devloop",
+        "summarize-weekly-devloop",
+    }
