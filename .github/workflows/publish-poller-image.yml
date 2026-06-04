@@ -4,9 +4,8 @@ name: Publish Poller Image
 # that detects `agent-ready`-labeled issues and forwards them to the Temporal
 # Orchestration Worker webhook to start a Dev Loop.
 #
-# Triggers (continuous / main only):
+# Triggers (main only):
 #   - workflow_run after "CI" succeeds on main → sha-<short>-<epoch> + latest tags
-#   - pull_request                             → build + test only (no push)
 #
 # Depending on CI (rather than push to main directly) ensures the image is never
 # pushed against a broken devloop package. Release (semver) builds run in
@@ -16,7 +15,6 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-  pull_request:
 
 concurrency:
   group: publish-poller-${{ github.ref }}
@@ -44,10 +42,8 @@ jobs:
     name: Build and push poller to GHCR
     needs: test
     if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main')
+      github.event.workflow_run.head_branch == 'main'
     permissions:
       packages: write
       contents: read

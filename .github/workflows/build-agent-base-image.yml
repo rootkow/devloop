@@ -4,9 +4,8 @@ name: Build Agent Base Image
 # base for all per-project agent images (OpenHands SDK, Temporal SDK, git, gh,
 # kubectl, flux).
 #
-# Triggers (continuous / main only):
-#   - push to main   → sha-<short>-<epoch> + latest tags (SDK unpinned = latest)
-#   - pull_request   → build + test only (no push)
+# Triggers (main only):
+#   - push to main → sha-<short>-<epoch> + latest tags (SDK unpinned = latest)
 #
 # Release (semver) builds run in release.yml, which pins omneval-devloop to the
 # tag version and waits for the PyPI publish first. This workflow deliberately
@@ -15,7 +14,6 @@ name: Build Agent Base Image
 on:
   push:
     branches: [main]
-  pull_request:
 
 concurrency:
   group: build-agent-base-${{ github.ref }}

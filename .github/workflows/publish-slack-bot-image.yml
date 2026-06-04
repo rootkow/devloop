@@ -3,9 +3,8 @@ name: Publish Slack Bot Image
 # Builds and publishes ghcr.io/omneval/devloop-slack-bot — the Slack <-> Temporal
 # bridge for Phase Gates and changelog posts.
 #
-# Triggers (continuous / main only):
+# Triggers (main only):
 #   - workflow_run after "CI" succeeds on main → sha-<short>-<epoch> + latest tags
-#   - pull_request                             → build only (no push)
 #
 # Depending on CI (rather than push to main directly) ensures the image is never
 # pushed against a broken devloop package. Release (semver) builds run in
@@ -19,7 +18,6 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-  pull_request:
 
 concurrency:
   group: publish-slack-bot-${{ github.ref }}
@@ -29,10 +27,8 @@ jobs:
   build_and_push:
     name: Build and push slack-bot to GHCR
     if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main')
+      github.event.workflow_run.head_branch == 'main'
     permissions:
       packages: write
       contents: read

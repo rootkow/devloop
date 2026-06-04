@@ -4,9 +4,8 @@ name: Publish Temporal Worker Image
 # Temporal Orchestration Worker that installs omneval-devloop and registers the
 # Dev Loop + Summarization workflows.
 #
-# Triggers (continuous / main only):
+# Triggers (main only):
 #   - workflow_run after "CI" succeeds on main → sha-<short>-<epoch> + latest tags
-#   - pull_request                             → build only (no push)
 #
 # Release (semver) builds run in release.yml, which pins the SDK to the tag and
 # waits for the PyPI publish first; this workflow has no tag trigger so the two
@@ -16,7 +15,6 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-  pull_request:
 
 concurrency:
   group: publish-temporal-worker-${{ github.ref }}
@@ -26,10 +24,8 @@ jobs:
   build_and_push:
     name: Build and push temporal-worker to GHCR
     if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main')
+      github.event.workflow_run.head_branch == 'main'
     permissions:
       packages: write
       contents: read
