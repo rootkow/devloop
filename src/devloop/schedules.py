@@ -41,25 +41,43 @@ async def _ensure(client: Client, schedule_id: str, schedule: Schedule) -> None:
     whether the schedule is paused, its note, and any remaining-action limit are
     read from the live schedule and carried across the update unchanged (a worker
     restart must not silently un-pause a schedule an operator paused).
+
+    Reconciliation is best-effort: it runs on the critical worker-startup path,
+    so any failure (e.g. the ``describe_schedule`` RPC behind ``update`` timing
+    out on a slow Temporal cluster) is caught and logged rather than allowed to
+    crash the worker. The describe is read-only, so a failed update leaves the
+    live schedule untouched; convergence simply retries on the next startup. The
+    trade-off: while reconciliation keeps failing, code-side config changes
+    (e.g. a new gate timeout) won't reach an already-existing schedule — hence
+    the loud WARNING so a persistent failure stays visible.
     """
     try:
-        await client.create_schedule(schedule_id, schedule)
-        log.info("created schedule %s", schedule_id)
-        return
-    except ScheduleAlreadyRunningError:
-        pass
+        try:
+            await client.create_schedule(schedule_id, schedule)
+            log.info("created schedule %s", schedule_id)
+            return
+        except ScheduleAlreadyRunningError:
+            pass
 
-    def _apply_desired(inp: ScheduleUpdateInput) -> ScheduleUpdate:
-        # Pure: the SDK may invoke this multiple times in a conflict-resolution
-        # loop. Overwrite everything from the freshly-built ``schedule`` except
-        # the operator-controlled runtime state.
-        refreshed = dataclasses.replace(
-            schedule, state=inp.description.schedule.state
+        def _apply_desired(inp: ScheduleUpdateInput) -> ScheduleUpdate:
+            # Pure: the SDK may invoke this multiple times in a conflict-resolution
+            # loop. Overwrite everything from the freshly-built ``schedule`` except
+            # the operator-controlled runtime state.
+            refreshed = dataclasses.replace(
+                schedule, state=inp.description.schedule.state
+            )
+            return ScheduleUpdate(schedule=refreshed)
+
+        await client.get_schedule_handle(schedule_id).update(_apply_desired)
+        log.info("updated schedule %s", schedule_id)
+    except Exception:
+        log.warning(
+            "schedule reconciliation for %s failed; worker will continue and "
+            "retry on next startup (code-side config changes will not reach this "
+            "schedule until reconciliation succeeds)",
+            schedule_id,
+            exc_info=True,
         )
-        return ScheduleUpdate(schedule=refreshed)
-
-    await client.get_schedule_handle(schedule_id).update(_apply_desired)
-    log.info("updated schedule %s", schedule_id)
 
 
 async def ensure_schedules(client: Client, projects: list[ProjectConfig]) -> None:
