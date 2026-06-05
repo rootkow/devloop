@@ -54,7 +54,7 @@ class DevLoopInput:
     # Plan/merge human-approval gates. Without a bound, a forgotten
     # approval parks the run forever, and because the webhook reuses the
     # devloop-<project> workflow id (USE_EXISTING), every later issue is then
-    # silently dropped. On timeout the  plan gate pauses the loop and the 
+    # silently dropped. On timeout the  plan gate pauses the loop and the
     # merge gate leaves the PR open and moves on.
     gate_timeout_seconds: float = 14400.0  # 4h plan/merge approval gate
     replan_max: int = 3

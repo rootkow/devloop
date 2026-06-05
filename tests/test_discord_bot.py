@@ -29,6 +29,7 @@ def _import_discord_bot():
 
     import importlib
     import devloop.messaging.discord_bot as mod
+
     importlib.reload(mod)
     return mod
 

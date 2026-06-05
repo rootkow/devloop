@@ -25,6 +25,17 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # These classes are created lazily at runtime by _init_structured_models().
+    # Stubs here satisfy static analysis (ruff F821) and IDE autocomplete.
+    from pydantic import BaseModel as PlanIssue
+    from pydantic import BaseModel as PlanOutput
+    from pydantic import BaseModel as InlineComment
+    from pydantic import BaseModel as ReviewOutput
+    from pydantic import BaseModel as RecommendedAction
+    from pydantic import BaseModel as DiagnosisOutput
 
 # The Agent Job ↔ worker protocol (TaskSpec, AgentJobResult, ConfigMap keys) is
 # owned by the installed omneval-devloop package so both images share one
@@ -41,6 +52,164 @@ import skills
 
 log = logging.getLogger("agent-entrypoint")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+# --------------------------------------------------------------------------- #
+# Structured output models (issue #53) — lazy-loaded via __getattr__ so the
+# module can import even when ``openai`` / ``pydantic`` are absent
+# (e.g. root venv stub tests).  Handlers call ``_init_structured_models()``
+# before using the bare names PlanOutput / ReviewOutput / DiagnosisOutput.
+# --------------------------------------------------------------------------- #
+
+_structured_models_cache: dict[str, Any] | None = None
+
+
+def _init_structured_models() -> dict[str, Any]:
+    """Build Pydantic model classes on first call. Safe to call multiple times.
+
+    Returns a mapping of model name → class so handlers can update their local
+    namespace for bare-name references.
+    """
+    global _structured_models_cache
+    if _structured_models_cache is not None:
+        return _structured_models_cache
+
+    from openai import OpenAI as _OpenAIClass
+    from pydantic import BaseModel as _BaseModelClass
+
+    class PlanIssue(_BaseModelClass):
+        """One issue in a plan output."""
+
+        id: int
+        title: str
+        branch: str
+
+    class PlanOutput(_BaseModelClass):
+        """Structured output for the plan phase."""
+
+        issues: list[PlanIssue] = []
+
+    class InlineComment(_BaseModelClass):
+        """A single inline review comment."""
+
+        file: str
+        line: int
+        body: str
+
+    class ReviewOutput(_BaseModelClass):
+        """Structured output for the review phase."""
+
+        summary: str
+        verdict: str = ""
+        inline_comments: list[InlineComment] = []
+
+    class RecommendedAction(_BaseModelClass):
+        """A single remediation action from the diagnosis phase."""
+
+        action: str
+        requires_approval: bool = False
+        rationale: str = ""
+
+    class DiagnosisOutput(_BaseModelClass):
+        """Structured output for the diagnosis phase."""
+
+        severity: str
+        affected_resource: str
+        root_cause_hypothesis: str
+        recommended_actions: list[RecommendedAction] = []
+
+    _structured_models_cache = {
+        "PlanIssue": PlanIssue,
+        "PlanOutput": PlanOutput,
+        "InlineComment": InlineComment,
+        "ReviewOutput": ReviewOutput,
+        "RecommendedAction": RecommendedAction,
+        "DiagnosisOutput": DiagnosisOutput,
+        "_OpenAI": _OpenAIClass,
+    }
+    # Populate module __dict__ so bare names in handler functions resolve
+    import sys as _sys
+
+    _mod = _sys.modules[__name__]
+    for _k, _v in _structured_models_cache.items():
+        if not _k.startswith("_"):
+            _mod.__dict__[_k] = _v
+    return _structured_models_cache
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562 module-level lazy import for structured output models."""
+    if name in (
+        "PlanIssue",
+        "PlanOutput",
+        "InlineComment",
+        "ReviewOutput",
+        "RecommendedAction",
+        "DiagnosisOutput",
+    ):
+        models = _init_structured_models()
+        val = models[name]
+        # Cache on the module so subsequent bare references work
+        import sys
+
+        sys.modules[__name__].__dict__[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _get_llm_client() -> Any:
+    """Return an OpenAI client configured from AGENT_* env vars."""
+    models = _init_structured_models()
+    OpenAI = models["_OpenAI"]
+    return OpenAI(
+        api_key=os.environ.get("AGENT_LLM_API_KEY", "none"),
+        base_url=os.environ.get("AGENT_LLM_BASE_URL"),
+    )
+
+
+def structured_extractor(text: str, model_cls: type[Any]) -> Any:
+    """Extract structured output from *text* using a single LLM call with
+    ``response_format`` backed by a Pydantic model.
+
+    Raises ``ValueError`` with a clear message if the LLM response is malformed
+    or cannot be parsed into *model_cls*.
+    """
+    _init_structured_models()
+
+    client = _get_llm_client()
+    model = os.environ.get("AGENT_MODEL", "qwen3-27b")
+    schema = model_cls.model_json_schema()
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract the structured data from the following text. "
+                        "Return only valid JSON matching the requested schema."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            response_format={"type": "json_schema", "json_schema": {"schema": schema}},
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"LLM call failed during structured extraction: {exc}"
+        ) from exc
+
+    content = response.choices[0].message.content
+    if not content:
+        raise ValueError(
+            f"Empty LLM response during extraction of {model_cls.__name__}"
+        )
+    try:
+        return model_cls.model_validate_json(content)
+    except Exception as exc:
+        raise ValueError(
+            f"Malformed LLM response for {model_cls.__name__}: {exc}"
+        ) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -721,7 +890,14 @@ def run_agent(spec: TaskSpec, workdir: str, tracer) -> AgentOutcome:
         if best_guess_note:
             text = f"{text}\n\n{best_guess_note}" if text else best_guess_note
 
-    structured = _extract_diagnosis(text) if spec.phase == "diagnosis" else None
+    if spec.phase == "diagnosis":
+        try:
+            diag = structured_extractor(text, DiagnosisOutput)
+            structured = diag.model_dump()
+        except ValueError:
+            structured = None
+    else:
+        structured = None
     return AgentOutcome(summary=text, structured=structured)
 
 
@@ -824,75 +1000,6 @@ def build_agent_message(spec: TaskSpec) -> str:
     return spec.instructions
 
 
-_PLAN_RE = re.compile(r"<plan>([\s\S]*?)</plan>", re.IGNORECASE)
-
-
-def _extract_plan(text: str) -> dict | None:
-    """Parse the ``<plan>{...}</plan>`` block emitted by the planner prompt."""
-    m = _PLAN_RE.search(text or "")
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(1).strip())
-    except json.JSONDecodeError:
-        return None
-
-
-def _extract_json(text: str) -> dict | None:
-    try:
-        start = text.index("{")
-        end = text.rindex("}") + 1
-        return json.loads(text[start:end])
-    except (ValueError, json.JSONDecodeError):
-        return None
-
-
-_DIAG_RE = re.compile(r"<diagnosis>([\s\S]*?)</diagnosis>", re.IGNORECASE)
-
-
-def _extract_diagnosis(text: str) -> dict | None:
-    """Parse the ``<diagnosis>{...}</diagnosis>`` block the diagnosis prompt emits.
-
-    Tolerant of a ```` ```json ```` fence inside the tags and of the model
-    omitting the tags entirely (falls back to the first/last-brace JSON scan).
-    Returns None if no JSON is recoverable."""
-    m = _DIAG_RE.search(text or "")
-    inner = m.group(1) if m else (text or "")
-    inner = inner.strip()
-    if inner.startswith("```"):
-        # drop a leading ```json / ``` fence and any trailing fence
-        inner = re.sub(r"^```[a-zA-Z]*\n?", "", inner)
-        inner = re.sub(r"\n?```$", "", inner.strip())
-    try:
-        return json.loads(inner.strip())
-    except json.JSONDecodeError:
-        return _extract_json(inner)
-
-
-_REVIEW_RE = re.compile(r"<review>([\s\S]*?)</review>", re.IGNORECASE)
-
-
-def _extract_review(text: str) -> dict | None:
-    """Parse the ``<review>{...}</review>`` block the reviewer prompt emits:
-    ``{"summary": str, "inline_comments": [{"file","line","body"}]}``.
-
-    Only matches an explicit ``<review>`` block (unlike diagnosis, which falls
-    back to a brace scan) — the reviewer's free-text narration would otherwise be
-    misparsed as findings. Tolerant of a ```` ```json ```` fence inside the tags.
-    Returns None when no block is present or no JSON is recoverable."""
-    m = _REVIEW_RE.search(text or "")
-    if not m:
-        return None
-    inner = m.group(1).strip()
-    if inner.startswith("```"):
-        inner = re.sub(r"^```[a-zA-Z]*\n?", "", inner)
-        inner = re.sub(r"\n?```$", "", inner.strip())
-    try:
-        return json.loads(inner.strip())
-    except json.JSONDecodeError:
-        return _extract_json(inner)
-
-
 def _normalize_actions(actions) -> list[dict]:
     """Coerce the model's recommended_actions into ``[{action, requires_approval,
     rationale}]`` with a string command and a bool gate.
@@ -948,12 +1055,17 @@ def handle_plan(spec: TaskSpec, tracer) -> dict:
     The planner reads the open issues (via ``gh`` in the prompt) and the real
     codebase, builds a dependency graph, and lists the unblocked issues.
     """
+    _init_structured_models()
     workdir = os.getenv("WORKDIR", "/workspace/repo")
     base = os.environ.get("DEFAULT_BRANCH", "main")
     with tracer.start_as_current_span("clone"):
         clone_repo(os.environ["GITHUB_URL"], base, workdir)
     outcome = run_agent(spec, workdir, tracer)
-    plan = _extract_plan(outcome.summary) or {"issues": []}
+    try:
+        plan_model = structured_extractor(outcome.summary, PlanOutput)
+        plan = plan_model.model_dump()
+    except ValueError:
+        plan = {"issues": []}
     plan.setdefault("issues", [])
     return AgentJobResult(
         status="complete", plan=plan, summary=outcome.summary
@@ -1033,6 +1145,7 @@ def handle_review(spec: TaskSpec, tracer) -> dict:
     """Review phase: the reviewer prompt refines the branch in place (clarity,
     consistency, standards) and commits. Any refinements are pushed back to the
     branch; functionality is preserved."""
+    _init_structured_models()
     workdir = os.getenv("WORKDIR", "/workspace/repo")
     with tracer.start_as_current_span("clone"):
         clone_repo(os.environ["GITHUB_URL"], spec.branch, workdir)
@@ -1052,12 +1165,17 @@ def handle_review(spec: TaskSpec, tracer) -> dict:
     if refinements:
         with tracer.start_as_current_span("push"):
             push_branch(workdir, spec.branch, force=True)
+    try:
+        review_model = structured_extractor(outcome.summary, ReviewOutput)
+        review = review_model.model_dump()
+    except ValueError:
+        review = None
     return AgentJobResult(
         status="complete",
         issue_number=spec.issue_number,
         branch=spec.branch,
         commits=refinements,
-        review=_extract_review(outcome.summary),
+        review=review,
         summary=outcome.summary,
     ).to_payload()
 
@@ -1122,6 +1240,7 @@ def handle_diagnosis(spec: TaskSpec, tracer) -> dict:
     workflow's remediation phase can allowlist-check and (autonomously or after a
     Discord gate) run them. Falls back to a label-only diagnosis with no actions
     if the model produced nothing parseable."""
+    _init_structured_models()
     alert = spec.extra.get("alert", {}) or {}
     outcome = run_agent(spec, os.getenv("WORKDIR", "/tmp"), tracer)
     structured = outcome.structured or {}

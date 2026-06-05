@@ -17,7 +17,6 @@ import pytest
 from scripts.restart_workflows import (
     IssueChecker,
     OpenIssuesResult,
-    TriggerResult,
     WebhookPoster,
     restart_project,
 )
@@ -44,10 +43,16 @@ def _issue_transport(*issue_numbers: int) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-def _webhook_transport(status: int = 200, body: dict | None = None) -> tuple[httpx.MockTransport, list[httpx.Request]]:
+def _webhook_transport(
+    status: int = 200, body: dict | None = None
+) -> tuple[httpx.MockTransport, list[httpx.Request]]:
     """Return (transport, captured_requests) that returns the given status."""
     captured: list[httpx.Request] = []
-    response_body = body or {"workflow_id": "devloop-myproject", "project": "myproject", "issue": 0}
+    response_body = body or {
+        "workflow_id": "devloop-myproject",
+        "project": "myproject",
+        "issue": 0,
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.append(request)
@@ -148,7 +153,9 @@ def _make_checker(issue_numbers: list[int]) -> IssueChecker:
     return IssueChecker(httpx.Client(transport=_issue_transport(*issue_numbers)))
 
 
-def _make_poster(status: int = 200, body: dict | None = None) -> tuple[WebhookPoster, list[httpx.Request]]:
+def _make_poster(
+    status: int = 200, body: dict | None = None
+) -> tuple[WebhookPoster, list[httpx.Request]]:
     transport, captured = _webhook_transport(status, body)
     return WebhookPoster(httpx.Client(transport=transport)), captured
 
@@ -199,8 +206,14 @@ class TestRestartProject:
         checker = _make_checker([])  # would return no issues, but not called
         poster, captured = _make_poster()
         result = restart_project(
-            checker, poster, _WEBHOOK_URL, _REPO, _LABEL,
-            github_token=None, webhook_secret="", dry_run=False
+            checker,
+            poster,
+            _WEBHOOK_URL,
+            _REPO,
+            _LABEL,
+            github_token=None,
+            webhook_secret="",
+            dry_run=False,
         )
         assert result.success
         assert result.open_issues == -1  # check was skipped

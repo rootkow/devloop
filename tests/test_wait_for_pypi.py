@@ -280,9 +280,7 @@ class TestMainCLI:
             "scripts.wait_for_pypi.httpx.Client",
             lambda *a, **kw: fake_client,
         )
-        monkeypatch.setattr(
-            "sys.argv", ["wait_for_pypi.py", "omneval-devloop==0.0.2"]
-        )
+        monkeypatch.setattr("sys.argv", ["wait_for_pypi.py", "omneval-devloop==0.0.2"])
 
         from scripts.wait_for_pypi import main
 
@@ -292,6 +290,7 @@ class TestMainCLI:
 
     def test_timeout_exit_code(self, monkeypatch, capsys):
         """Return 1 when all retries are exhausted."""
+
         def fake_wait_for_package(
             client, name, version, max_attempts=40, sleep_seconds=15.0
         ):
@@ -300,9 +299,7 @@ class TestMainCLI:
         monkeypatch.setattr(
             "scripts.wait_for_pypi.wait_for_package", fake_wait_for_package
         )
-        monkeypatch.setattr(
-            "sys.argv", ["wait_for_pypi.py", "omneval-devloop==0.0.2"]
-        )
+        monkeypatch.setattr("sys.argv", ["wait_for_pypi.py", "omneval-devloop==0.0.2"])
 
         from scripts.wait_for_pypi import main
 
