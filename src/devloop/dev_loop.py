@@ -54,7 +54,7 @@ class DevLoopInput:
     # Plan/merge human-approval gates. Without a bound, a forgotten
     # approval parks the run forever, and because the webhook reuses the
     # devloop-<project> workflow id (USE_EXISTING), every later issue is then
-    # silently dropped. On timeout the  plan gate pauses the loop and the 
+    # silently dropped. On timeout the  plan gate pauses the loop and the
     # merge gate leaves the PR open and moves on.
     gate_timeout_seconds: float = 14400.0  # 4h plan/merge approval gate
     replan_max: int = 3
@@ -387,8 +387,12 @@ class DevLoopWorkflow:
     async def _post_review_findings(
         self, inp: DevLoopInput, exec_result: dict, result: AgentJobResult
     ) -> None:
-        """Post the reviewer's findings to the PR. No-ops when the review Agent
-        Execution Job returned no findings or the PR number can't be resolved."""
+        """Post the reviewer's findings to the PR.
+
+        Raises ``RuntimeError`` when findings exist but the PR URL cannot be
+        resolved (unparseable or missing), so the failure surfaces rather than
+        silently dropping review comments.
+        """
         review = result.review or {}
         summary = review.get("summary", "")
         inline = [
@@ -401,18 +405,20 @@ class DevLoopWorkflow:
         ]
         if not summary and not inline:
             return
-        pr_number = logic.pr_number_from_url(exec_result.get("pr_url", ""))
+        pr_url = exec_result.get("pr_url", "")
+        pr_number = logic.pr_number_from_url(pr_url)
         if not pr_number:
-            return
+            raise RuntimeError(
+                f"cannot post review findings: pr_url '{pr_url}' "
+                f"for project {inp.project_id} is unparseable or missing"
+            )
         await workflow.execute_activity(
             "post_pr_comments",
             PostCommentsInput(inp.project_id, pr_number, summary, inline),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=_RETRY,
         )
-        await self._notify(
-            f"💬 Posted review findings to {exec_result.get('pr_url') or f'#{pr_number}'}"
-        )
+        await self._notify(f"💬 Posted review findings to {pr_url or f'#{pr_number}'}")
 
     # ---- Merge gate + Merge (#23) -------------------------------------- #
     async def _merge_phase(

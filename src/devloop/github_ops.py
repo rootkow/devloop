@@ -86,7 +86,19 @@ class FileIssuesInput:
 async def post_pr_comments(inp: PostCommentsInput) -> None:
     """Post the reviewer's findings to a PR: a summary comment plus any
     line-anchored inline review comments. Called by the Dev Loop after the review
-    Agent Execution Job returns its ``review`` payload."""
+    Agent Execution Job returns its ``review`` payload.
+
+    Raises ``ValueError`` when the input is genuinely invalid (empty summary
+    with no inline comments, or unresolvable PR number) so failures surface
+    as errors rather than silent no-ops.
+    """
+    if not inp.summary and not inp.inline_comments:
+        raise ValueError(
+            "post_pr_comments requires a non-empty summary or inline comments"
+        )
+    if inp.pr_number <= 0:
+        raise ValueError("post_pr_comments requires a valid pr_number (got 0)")
+
     cfg = get_project(inp.project_id)
     repo = parse_github_repo(cfg.github_url)
     with _client(cfg) as c:

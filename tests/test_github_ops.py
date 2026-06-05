@@ -97,6 +97,26 @@ async def test_post_pr_comments_posts_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_post_pr_comments_raises_on_empty_summary_no_inline(monkeypatch):
+    """An empty summary with no inline comments must raise — never silently skip."""
+    monkeypatch.setattr(github_ops, "_client", lambda cfg: FakeClient())
+    with pytest.raises(ValueError, match="summary"):
+        await ActivityEnvironment().run(
+            post_pr_comments, PostCommentsInput("omneval", 7, "", [])
+        )
+
+
+@pytest.mark.asyncio
+async def test_post_pr_comments_raises_on_zero_pr_number(monkeypatch):
+    """A pr_number of 0 (unparseable URL) must raise — never silently skip."""
+    monkeypatch.setattr(github_ops, "_client", lambda cfg: FakeClient())
+    with pytest.raises(ValueError, match="pr_number"):
+        await ActivityEnvironment().run(
+            post_pr_comments, PostCommentsInput("omneval", 0, "review ok", [])
+        )
+
+
+@pytest.mark.asyncio
 async def test_post_pr_comments_posts_inline(monkeypatch):
     posts = []
     pages = [{"head": {"sha": "deadbeef"}}]  # the c.get(/pulls/7) for the commit SHA
@@ -108,6 +128,23 @@ async def test_post_pr_comments_posts_inline(monkeypatch):
     await ActivityEnvironment().run(
         post_pr_comments,
         PostCommentsInput("omneval", 7, "summary", [InlineComment("a.py", 3, "note")]),
+    )
+    assert any("/pulls/7/reviews" in url for url, _ in posts)
+
+
+@pytest.mark.asyncio
+async def test_post_pr_comments_posts_inline_only_no_summary(monkeypatch):
+    """Inline comments alone (no summary) must still be posted."""
+    posts = []
+    pages = [{"head": {"sha": "deadbeef"}}]
+    monkeypatch.setattr(
+        github_ops,
+        "_client",
+        lambda cfg: FakeClient(get_pages=pages, post_capture=posts),
+    )
+    await ActivityEnvironment().run(
+        post_pr_comments,
+        PostCommentsInput("omneval", 7, "", [InlineComment("b.py", 10, "fix")]),
     )
     assert any("/pulls/7/reviews" in url for url, _ in posts)
 

@@ -165,13 +165,11 @@ def wait_for_package(
             )
         if result.metadata_ok and not result.simple_index_ok:
             print(
-                f"Attempt {attempt}/{max_attempts}: {version} "
-                f"not in simple index yet"
+                f"Attempt {attempt}/{max_attempts}: {version} not in simple index yet"
             )
         if result.metadata_ok and result.simple_index_ok and not result.files_ok:
             print(
-                f"Attempt {attempt}/{max_attempts}: "
-                f"release files not downloadable yet"
+                f"Attempt {attempt}/{max_attempts}: release files not downloadable yet"
             )
 
         if attempt < max_attempts:

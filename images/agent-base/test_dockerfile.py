@@ -36,7 +36,7 @@ def test_skills_module_is_copied_next_to_entrypoint():
     assert entrypoint_dst, "Dockerfile no longer COPYs entrypoint.py"
     assert skills_dst, (
         "Dockerfile does not COPY skills.py — entrypoint's `import skills` will "
-        'fail at runtime with "No module named \'skills\'"'
+        "fail at runtime with \"No module named 'skills'\""
     )
     assert Path(skills_dst).parent == Path(entrypoint_dst).parent, (
         f"skills.py ({skills_dst}) must sit beside the entrypoint "

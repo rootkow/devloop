@@ -112,7 +112,10 @@ def _job_resources() -> dict:
     limits: dict = {"memory": memory_limit}
     if cpu_limit:
         limits["cpu"] = cpu_limit
-    return {"requests": {"cpu": cpu_request, "memory": memory_request}, "limits": limits}
+    return {
+        "requests": {"cpu": cpu_request, "memory": memory_request},
+        "limits": limits,
+    }
 
 
 def render_job(d: DispatchInput, job_name: str) -> dict:

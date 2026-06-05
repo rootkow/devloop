@@ -64,6 +64,7 @@ def test_llm_summary_uses_agent_llm_base_url(monkeypatch):
     monkeypatch.setenv("AGENT_LLM_BASE_URL", "http://custom-llm.local/v1")
     # Reload the module so the module-level variable picks up the new env value.
     import importlib
+
     importlib.reload(sa)
 
     fake_response = MagicMock()

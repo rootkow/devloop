@@ -56,7 +56,9 @@ class _FakeHandle:
     async def update(self, updater, **kwargs):
         if self._raises is not None:
             raise self._raises
-        result = updater(ScheduleUpdateInput(description=_FakeDescription(self._current)))
+        result = updater(
+            ScheduleUpdateInput(description=_FakeDescription(self._current))
+        )
         self.applied = result.schedule
 
 
