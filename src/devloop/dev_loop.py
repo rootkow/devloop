@@ -34,6 +34,7 @@ from .shared import (
     InlineComment,
     JobStatus,
     OpenAgentPRsInput,
+    PollPRChecksInput,
     PostCommentsInput,
     SendMessageInput,
     SendNotificationInput,
@@ -250,6 +251,10 @@ class DevLoopWorkflow:
                 )
                 continue
 
+            parked = await self._remediation_phase(inp, issue, exec_result)
+            if parked:
+                continue
+
             await self._review_phase(inp, issue, exec_result)
 
             outcome = await self._merge_phase(inp, issue, exec_result, thread_name)
@@ -363,6 +368,73 @@ class DevLoopWorkflow:
                 retry_policy=_RETRY,
             )
         return result
+
+    # ---- Remediation phase (#56) --------------------------------------- #
+    async def _remediation_phase(
+        self, inp: DevLoopInput, issue: dict, exec_result: dict
+    ) -> bool:
+        """Run the Remediation phase between Execute and Review.
+
+        Polls CI checks on the draft PR. If all checks pass (or none exist)
+        this is a no-op. If checks are failing, one Agent Execution Job is
+        dispatched with the remediation prompt. On failure the issue is
+        parked with a Discord notification.
+
+        Returns True if the issue was parked (caller should ``continue`` to
+        the next round), False otherwise.
+        """
+        issue_no = _as_int(issue.get("id"))
+        pr_url = exec_result.get("pr_url", "")
+        pr_number = logic.pr_number_from_url(pr_url)
+
+        # Poll CI check runs on the PR
+        checks = await workflow.execute_activity(
+            "poll_pr_checks",
+            PollPRChecksInput(
+                inp.project_id,
+                pr_number,
+                timeout_seconds=inp.poll_interval_seconds,
+            ),
+            result_type=dict,
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=_RETRY,
+        )
+
+        # No-op when all checks pass or no checks exist
+        failures = checks.get("failures", [])
+        if not failures:
+            return False
+
+        # Dispatch remediation agent job with failing checks context
+        spec = TaskSpec(
+            phase="remediation",
+            project_id=inp.project_id,
+            issue_number=issue_no,
+            branch=exec_result.get("branch", ""),
+            extra={
+                "ci_check_failures": "\n".join(failures),
+            },
+        )
+        result = await self._dispatch(inp, spec, issue_number=issue_no)
+
+        # If remediation produced no commits or failed, park the issue
+        if result.status != JobStatus.COMPLETE.value or not result.commits:
+            await self._park_issue(inp, issue_no, failures)
+            return True  # skip to next round
+
+        await self._notify(
+            f"🔧 Remediated #{issue_no} — pushed {result.commits} fix commit(s)."
+        )
+        return False
+
+    async def _park_issue(
+        self, inp: DevLoopInput, issue_no: int, failures: list[str]
+    ) -> None:
+        """Send a Discord notification and park the issue for this round."""
+        summary = "\n".join(failures[:3])  # cap to 3 failures in notification
+        await self._notify(
+            f"🅿️  Parked #{issue_no} — remediation failed. Failing checks:\n{summary}"
+        )
 
     # ---- Review phase (#22) -------------------------------------------- #
     async def _review_phase(

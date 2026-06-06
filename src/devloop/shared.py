@@ -218,6 +218,17 @@ class AwaitInput:
 
 
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class PollPRChecksInput:
+    """Input for polling CI check runs on a draft PR."""
+
+    project_id: str
+    pr_number: int
+    timeout_seconds: float = 300.0
+
+
 # Messaging activity I/O
 # ---------------------------------------------------------------------------
 

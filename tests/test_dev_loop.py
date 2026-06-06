@@ -52,6 +52,10 @@ class Mocks:
     # issue numbers the "open_agent_pr_issue_numbers" activity reports as already
     # having an open review PR (planner should skip these)
     open_agent_prs: list = field(default_factory=list)
+    # remediation phase
+    poll_pr_checks_result: dict = field(default_factory=lambda: {"failures": []})
+    remediation_commits: int = 1
+    remediation_status: str = JobStatus.COMPLETE.value
 
 
 M = Mocks()
@@ -66,6 +70,10 @@ def _one_issue(num=1):
 
 
 def _make_activities():
+    @activity.defn(name="poll_pr_checks")
+    async def poll_pr_checks(inp):
+        return M.poll_pr_checks_result
+
     @activity.defn(name="dispatch_agent_job")
     async def dispatch_agent_job(inp) -> AgentJobResult:
         phase = (
@@ -76,6 +84,17 @@ def _make_activities():
         key = (phase, issue)
         if key in M.dispatch_behavior:
             return M.dispatch_behavior[key]
+        if phase == "remediation":
+            return AgentJobResult(
+                status=M.remediation_status,
+                job_name=f"remediation-{issue}",
+                issue_number=issue,
+                commits=M.remediation_commits,
+                branch=inp["task_spec"]["branch"]
+                if isinstance(inp, dict)
+                else inp.task_spec.branch,
+                pr_url=f"https://github.com/example/test-project/pull/{issue}",
+            )
         if phase == "plan":
             doc = (
                 M.plan_rounds[M.plan_calls]
@@ -173,6 +192,7 @@ def _make_activities():
 
     return (
         [
+            poll_pr_checks,
             dispatch_agent_job,
             answer_agent_job,
             await_agent_job,
@@ -459,3 +479,52 @@ async def test_review_no_findings_skips_post(reset_mocks):
     result = await _env_and_run(DevLoopInput("omneval"), ["approve", "approve"])
     assert result.status == "completed"
     assert "post_pr_comments" not in M.dispatched_phases
+
+
+# --------------------------------------------------------------------------- #
+# Remediation phase (#56)
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_remediation_dispatched_between_execute_and_review(reset_mocks):
+    """Remediation is inserted between Execute and Review in the workflow."""
+    reset_mocks.plan_rounds = [_one_issue(1)]
+    reset_mocks.poll_pr_checks_result = {"failures": ["lint failed"]}
+    result = await _env_and_run(DevLoopInput("omneval"), ["approve", "approve"])
+    assert result.status == "completed"
+    assert result.merged_issues == [1]
+    phases = M.dispatched_phases
+    assert "execute" in phases
+    assert "remediation" in phases
+    assert "review" in phases
+    assert phases.index("remediation") > phases.index("execute")
+    assert phases.index("remediation") < phases.index("review")
+
+
+@pytest.mark.asyncio
+async def test_remediation_no_op_when_checks_pass(reset_mocks):
+    """When all CI checks pass, remediation is a no-op (no agent dispatched)."""
+    reset_mocks.plan_rounds = [_one_issue(1)]
+    reset_mocks.poll_pr_checks_result = {"failures": []}  # all checks pass
+    result = await _env_and_run(DevLoopInput("omneval"), ["approve", "approve"])
+    assert result.status == "completed"
+    phases = M.dispatched_phases
+    assert "remediation" not in phases
+
+
+@pytest.mark.asyncio
+async def test_remediation_parks_issue_on_failure(reset_mocks):
+    """When remediation produces zero commits, the issue is parked with a
+    Discord notification and the review phase is skipped for that round."""
+    reset_mocks.plan_rounds = [_one_issue(1)]
+    reset_mocks.poll_pr_checks_result = {"failures": ["check-a failed"]}
+    reset_mocks.remediation_commits = 0  # remediation produced no fix
+    result = await _env_and_run(DevLoopInput("omneval"), ["approve", "approve"])
+    assert result.status == "completed"
+    phases = M.dispatched_phases
+    assert "remediation" in phases
+    # Review and merge must NOT be dispatched after a parked issue
+    assert "review" not in phases
+    assert "merge" not in phases
+    # Discord notification was sent
+    notifications = M.notifications
+    assert any("Parked" in msg and "remediation failed" in msg for msg in notifications)
