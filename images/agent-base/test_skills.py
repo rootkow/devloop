@@ -8,11 +8,10 @@ construct test fixtures without importing the SDK.
 The one filesystem-touching test (``AGENT_SKILLS_DIR`` env override) also injects
 the loader, so it only needs to know which ``Path`` was passed to the loader.
 
-Filesystem tests write real SKILL.md files into temp directories and inject a
-local ``_file_loader`` that mirrors the openhands-sdk ``load_installed_skills``
-contract (name from YAML frontmatter; directory name as fallback). These verify
-the end-to-end baked-skills path: disk → loader → resolve_skills → (skills,
-skipped_report) without requiring the SDK to be installed locally.
+Filesystem tests exercise the real ``load_installed_skills`` loader from
+openhands-sdk 1.24.0 with temp directories containing real SKILL.md files.
+These verify the end-to-end baked-skills path: disk → SDK loader → resolve_skills
+→ (skills, skipped_report).
 """
 
 from __future__ import annotations
@@ -265,47 +264,13 @@ def test_agent_skills_dir_env_overrides_default(monkeypatch, tmp_path):
 
 
 # ============================================================================
-# Filesystem tests: real SKILL.md files → _file_loader → resolve_skills
+# Filesystem tests: real SKILL.md files → load_installed_skills → resolve_skills
 # ============================================================================
-
-# openhands-sdk is only available inside the Docker image, so a local
-# _file_loader mirrors its load_installed_skills contract: scan subdirectories
-# for SKILL.md, parse 'name' from YAML frontmatter, fall back to directory name.
-
-
-def _parse_frontmatter_name(content: str) -> str | None:
-    """Return the 'name' field from YAML frontmatter, or None."""
-    if not content.startswith("---"):
-        return None
-    in_fm = False
-    for i, line in enumerate(content.splitlines()):
-        if i == 0 and line == "---":
-            in_fm = True
-            continue
-        if in_fm and line == "---":
-            break
-        if in_fm and line.startswith("name:"):
-            return line.split(":", 1)[1].strip()
-    return None
-
-
-def _file_loader(installed_dir: Path) -> list:
-    """Local loader mirroring openhands-sdk load_installed_skills behavior."""
-    skills = []
-    for entry in sorted(installed_dir.iterdir()):
-        if not entry.is_dir():
-            continue
-        skill_md = entry / "SKILL.md"
-        if not skill_md.exists():
-            continue
-        content = skill_md.read_text()
-        name = _parse_frontmatter_name(content) or entry.name
-        skills.append(FakeSkill(name=name, content=content))
-    return skills
 
 
 def test_resolve_skills_loads_real_skill_from_disk(monkeypatch, tmp_path):
-    """A valid SKILL.md on disk is loaded and returned by resolve_skills."""
+    """A valid SKILL.md on disk is loaded by the real SDK loader and
+    returned by resolve_skills."""
     skills_mod = _import_skills()
     monkeypatch.delenv("AGENT_SKILLS_DIR", raising=False)
 
@@ -315,9 +280,7 @@ def test_resolve_skills_loads_real_skill_from_disk(monkeypatch, tmp_path):
 
     monkeypatch.setenv("AGENT_SKILLS_DIR", str(installed_dir))
 
-    resolved, skipped = skills_mod.resolve_skills(
-        phase="execute", allowlist=None, _loader=_file_loader
-    )
+    resolved, skipped = skills_mod.resolve_skills(phase="execute", allowlist=None)
 
     assert len(resolved) == 1
     assert resolved[0].name == "filesystem-skill"
@@ -325,10 +288,9 @@ def test_resolve_skills_loads_real_skill_from_disk(monkeypatch, tmp_path):
 
 
 def test_resolve_skills_loads_skill_without_frontmatter(monkeypatch, tmp_path):
-    """A SKILL.md without frontmatter uses the directory name as the skill name.
-
-    This mirrors the openhands-sdk normalisation behavior. resolve_skills trusts
-    the loader and returns the skill (with description=None via FakeSkill).
+    """The openhands-sdk 1.24.0 loader normalizes SKILL.md files that lack
+    frontmatter by using the directory name as the skill name. resolve_skills
+    trusts the SDK loader and returns the skill (with description=None).
 
     Malformed skills with empty names are caught by resolve_skills' guard
     (tested via injected _loader in test_unnamed_skill_is_skipped_and_reported).
@@ -339,16 +301,15 @@ def test_resolve_skills_loads_skill_without_frontmatter(monkeypatch, tmp_path):
     installed_dir = tmp_path / "installed"
     installed_dir.mkdir()
     _write_skill(installed_dir, "good-skill")
-    # No YAML frontmatter — _file_loader falls back to the directory name.
+    # Write a skill without YAML frontmatter — SDK normalises the name from
+    # the directory name and sets description=None.
     no_frontmatter_dir = installed_dir / "no-frontmatter"
     no_frontmatter_dir.mkdir()
     (no_frontmatter_dir / "SKILL.md").write_text("Just some text without frontmatter\n")
 
     monkeypatch.setenv("AGENT_SKILLS_DIR", str(installed_dir))
 
-    resolved, skipped = skills_mod.resolve_skills(
-        phase="execute", allowlist=None, _loader=_file_loader
-    )
+    resolved, skipped = skills_mod.resolve_skills(phase="execute", allowlist=None)
 
     resolved_names = [s.name for s in resolved]
     assert "good-skill" in resolved_names
@@ -366,9 +327,7 @@ def test_resolve_skills_empty_directory_returns_no_skills(monkeypatch, tmp_path)
 
     monkeypatch.setenv("AGENT_SKILLS_DIR", str(installed_dir))
 
-    resolved, skipped = skills_mod.resolve_skills(
-        phase="execute", allowlist=None, _loader=_file_loader
-    )
+    resolved, skipped = skills_mod.resolve_skills(phase="execute", allowlist=None)
 
     assert resolved == []
     assert skipped == []
@@ -386,9 +345,7 @@ def test_resolve_skills_multiple_skills_from_disk(monkeypatch, tmp_path):
 
     monkeypatch.setenv("AGENT_SKILLS_DIR", str(installed_dir))
 
-    resolved, skipped = skills_mod.resolve_skills(
-        phase="execute", allowlist=None, _loader=_file_loader
-    )
+    resolved, skipped = skills_mod.resolve_skills(phase="execute", allowlist=None)
 
     assert len(resolved) == 2
     resolved_names = [s.name for s in resolved]
