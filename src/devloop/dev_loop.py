@@ -419,7 +419,7 @@ class DevLoopWorkflow:
 
         # If remediation produced no commits or failed, park the issue
         if result.status != JobStatus.COMPLETE.value or not result.commits:
-            await self._park_issue(inp, issue_no, failures)
+            await self._park_issue(issue_no, failures)
             return True  # skip to next round
 
         await self._notify(
@@ -428,7 +428,7 @@ class DevLoopWorkflow:
         return False
 
     async def _park_issue(
-        self, inp: DevLoopInput, issue_no: int, failures: list[str]
+        self, issue_no: int, failures: list[str]
     ) -> None:
         """Send a Discord notification and park the issue for this round."""
         summary = "\n".join(failures[:3])  # cap to 3 failures in notification

@@ -217,9 +217,6 @@ class AwaitInput:
     poll_interval_seconds: float = 5.0
 
 
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class PollPRChecksInput:
     """Input for polling CI check runs on a draft PR."""
@@ -229,6 +226,7 @@ class PollPRChecksInput:
     timeout_seconds: float = 300.0
 
 
+# ---------------------------------------------------------------------------
 # Messaging activity I/O
 # ---------------------------------------------------------------------------
 
