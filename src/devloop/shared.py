@@ -14,16 +14,11 @@ from enum import Enum
 
 
 # Task queues — override via env vars to match helm chart values.
-# MESSAGING_TASK_QUEUE is the queue name for whichever messaging platform bot is
-# deployed (discord-bot, slack-bot, etc.); set it in helm values alongside the
-# bot's own TASK_QUEUE so both sides agree on the queue name.
 ORCHESTRATION_QUEUE = os.getenv("ORCHESTRATION_QUEUE", "devloop-orchestration")
-MESSAGING_QUEUE = os.getenv("MESSAGING_TASK_QUEUE", "discord-bot")
-
-# Discord channel logical names (resolved to IDs inside the bot)
-CHANNEL_APPROVALS = "approvals"
-CHANNEL_ALERTS = "alerts"
-CHANNEL_CHANGELOG = "changelog"
+# Dedicated queue for Agent Execution Job dispatches and LLM-bearing activities.
+# A separate Worker listens here with a configurable max_concurrent_activities
+# to enforce a global concurrency cap across all workflow types and projects.
+JOB_DISPATCH_QUEUE = os.getenv("JOB_DISPATCH_QUEUE", "devloop-job-dispatch")
 
 # Agent Job output ConfigMap contract: the keys the worker and the Agent
 # Execution Job exchange through the Job's output ConfigMap. Defined here so both
@@ -36,11 +31,12 @@ class Phase(str, Enum):
     PLAN = "plan"
     EXECUTE = "execute"
     REVIEW = "review"
-    MERGE = "merge"
     DIAGNOSIS = "diagnosis"
     FIX_PASS = "fix_pass"
-    REMEDIATION = "remediation"
+    CI_FIX = "ci_fix"
     SUMMARIZE = "summarize"
+    ANSWER = "answer"
+    PR_COMMENT = "pr_comment"
 
 
 class JobStatus(str, Enum):
@@ -227,29 +223,119 @@ class PollPRChecksInput:
 
 
 # ---------------------------------------------------------------------------
-# Messaging activity I/O
+# GitHub Issue comment notification activity I/O
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class SendMessageInput:
-    workflow_id: str
-    message: str
-    channel: str = "approvals"
-    thread_name: str = ""
+class GithubNotificationInput:
+    """Input for the post_github_comment activity.
+
+    Posts a comment to a GitHub Issue using the devloop-bot PAT
+    (GITHUB_TOKEN env var / project's github_token_secret).
+    """
+
+    issue_number: int
+    project_id: str
+    body: str
 
 
 @dataclass
-class SendMessageOutput:
-    thread_id: str
+class PollCIChecksInput:
+    """Input for the poll_ci_checks activity.
+
+    Polls the GitHub Checks/Status APIs for the head commit of the given PR
+    (``gh pr checks`` equivalent) and reports whether every check has passed,
+    plus details on any that failed — consumed by ``Phase.CI_FIX`` so the fix
+    Agent Execution Job knows exactly what to address.
+    """
+
+    project_id: str
+    pr_number: int
 
 
 @dataclass
-class SendNotificationInput:
-    workflow_id: str
-    message: str
+class CICheckFailure:
+    """One failing CI check, as surfaced to the ci_fix Agent Execution Job via
+    ``TaskSpec.extra["ci_check_failures"]``."""
+
+    name: str
+    conclusion: str = ""
+    details_url: str = ""
+    summary: str = ""
 
 
 @dataclass
-class ArchiveThreadInput:
-    workflow_id: str
+class CIChecksResult:
+    """The poll_ci_checks activity's result: pass/fail plus failure details.
+
+    ``pending`` distinguishes "still running — wait and re-poll" from
+    "genuinely failing — dispatch a fix": it's ``True`` only when no check
+    has actually failed yet but at least one is still queued/in-progress (or
+    the poll itself couldn't be completed, e.g. a transient GitHub-side
+    error). ``all_passed`` can be ``False`` while ``pending`` is ``True`` and
+    ``failures`` is empty — that combination means "not done yet", not "red"
+    (issue #90).
+    """
+
+    all_passed: bool = False
+    pending: bool = False
+    failures: list[CICheckFailure] = field(default_factory=list)
+
+
+@dataclass
+class RequestReviewerInput:
+    """Input for the request_github_reviewer activity.
+
+    Requests a GitHub user as a reviewer on a PR.
+    """
+
+    project_id: str
+    pr_number: int
+    reviewer: str
+
+
+@dataclass
+class ReviewerRequestResult:
+    """Outcome of the request_github_reviewer activity: whether a reviewer
+    was actually requested, and — when not — why (no reviewer configured,
+    no PR to request on, or a GitHub API failure). Lets callers like
+    ``_notify_reviewer`` phrase their notification honestly instead of
+    assuming the request succeeded (issue #88)."""
+
+    requested: bool = False
+    reason: str = ""
+
+
+@dataclass
+class GetPRDiffInput:
+    """Input for the get_pr_diff activity.
+
+    Fetches the unified diff for a PR (``Accept: application/vnd.github.diff``)
+    so ``PRCommentWorkflow`` can hand the reviewer/commenter's targeted feedback
+    *and* the actual code under discussion to the ``Phase.PR_COMMENT`` Agent
+    Execution Job via ``TaskSpec.extra``.
+    """
+
+    project_id: str
+    pr_number: int
+
+
+# ---------------------------------------------------------------------------
+# Summarization delivery activity I/O (issue #79)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PublishSummaryInput:
+    """Input for the publish_summary activity.
+
+    Carries the rendered digest from SummarizationWorkflow to the activity that
+    delivers it: opens a GitHub Issue (label ``devloop-summary``, created if
+    absent) and optionally POSTs the same payload to ``SUMMARIZATION_WEBHOOK_URL``
+    as JSON (fire-and-forget).
+    """
+
+    project_id: str
+    summary: str
+    date: str  # ISO date string, e.g. "2026-06-06"

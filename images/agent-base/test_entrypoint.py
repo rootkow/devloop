@@ -175,6 +175,26 @@ def test_build_agent_message_renders_bundled_prompt(monkeypatch):
     assert "{{" not in msg  # every placeholder substituted or stripped
 
 
+def test_build_agent_message_scopes_plan_to_triggering_issue(monkeypatch):
+    """The plan prompt must be rendered with the triggering issue's number
+    (TaskSpec.issue_number) substituted into {{TRIGGERING_ISSUE}}, so the Plan
+    agent fetches and scopes its work to that single issue rather than
+    replanning the whole agent-ready backlog (caught in real-cluster E2E
+    testing — without this, the agent could pick a different, larger issue to
+    execute first, surprising whoever applied the agent-ready label)."""
+    prompts_dir = Path(__file__).parent / "prompts"
+    monkeypatch.setenv("AGENT_PROMPTS_DIR", str(prompts_dir))
+    spec = entrypoint.TaskSpec(
+        phase="plan",
+        project_id="omneval",
+        issue_number=42,
+        extra={"agent_label": "agent-ready"},
+    )
+    msg = entrypoint.build_agent_message(spec)
+    assert "gh issue view 42" in msg
+    assert "{{" not in msg
+
+
 def test_remediation_prompt_renders_with_ci_check_failures(monkeypatch):
     """The remediation prompt is loaded from the bundled template and the
     {{BRANCH}}/{{CI_CHECK_FAILURES}} placeholders are substituted."""
@@ -284,6 +304,53 @@ def test_structured_extractor_review_via_llm(monkeypatch):
     assert result.summary == "looks good"
     assert result.verdict == "lgtm"
     assert result.inline_comments[0].line == 3
+
+
+def test_structured_extractor_strips_provider_prefix_from_model(monkeypatch):
+    """AGENT_MODEL is configured litellm-style as "<provider>/<model>" (e.g.
+    "openai/qwen3.6-27b-mtp") for the OpenHands LLM/litellm stack. The raw
+    OpenAI SDK client used here talks directly to an OpenAI-compatible endpoint
+    and rejects that prefixed name with "model not found" (caught in
+    real-cluster testing of the github-webook-refactor branch — every
+    structured extraction call failed in production config). Confirm the
+    prefix is stripped before being sent to the client."""
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+
+    from entrypoint import PlanOutput
+
+    plan_json = json.dumps(
+        {"issues": [{"id": 1, "title": "x", "branch": "agent/issue-1"}]}
+    )
+    mock_response = ChatCompletion(
+        id="test",
+        created=0,
+        model="test",
+        object="chat.completion",
+        choices=[
+            Choice(
+                index=0,
+                finish_reason="stop",
+                message=ChatCompletionMessage(content=plan_json, role="assistant"),
+            )
+        ],
+    )
+
+    monkeypatch.setenv("AGENT_MODEL", "openai/qwen3.6-27b-mtp")
+    monkeypatch.setenv("AGENT_LLM_API_KEY", "fake-key")
+    monkeypatch.setenv("AGENT_LLM_BASE_URL", "http://fake")
+
+    from unittest.mock import MagicMock, patch
+
+    with patch.object(entrypoint, "_get_llm_client") as mock_client_fn:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_client_fn.return_value = mock_client
+
+        entrypoint.structured_extractor("agent output text", PlanOutput)
+
+    _, kwargs = mock_client.chat.completions.create.call_args
+    assert kwargs["model"] == "qwen3.6-27b-mtp"
 
 
 def test_unknown_phase_writes_failure(tmp_path, monkeypatch):

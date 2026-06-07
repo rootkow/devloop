@@ -22,7 +22,6 @@ _PROJECT = ProjectConfig(
     default_branch="main",
     agent_image="zacharybloss/agent-omneval:sha-test",
     agent_label="agent-ready",
-    discord_channel="agent-approvals",
     omneval_ingest_secret="omneval-ingest-omneval",
     github_token_secret="omneval-agent-github-token",
 )
@@ -338,6 +337,40 @@ def test_render_job_omits_llm_env_when_unset(monkeypatch):
     assert "AGENT_MODEL" not in env_names
     assert "AGENT_LLM_BASE_URL" not in env_names
     assert "AGENT_LLM_API_KEY" not in env_names
+
+
+def test_render_job_passes_agents_namespace_when_set(monkeypatch):
+    """When the worker is deployed with AGENTS_NAMESPACE set to a non-default
+    namespace (e.g. a parallel test release in "devloop-test"), spawned Jobs
+    must inherit it — otherwise their write_output/cluster helpers default to
+    "agents" and get 403 Forbidden from their namespace-scoped ServiceAccount
+    (caught in real-cluster testing of the github-webook-refactor branch)."""
+    monkeypatch.setenv("AGENTS_NAMESPACE", "devloop-test")
+
+    d = _dispatch_input()
+    manifest = k8s_jobs.render_job(d, "agent-omneval-execute-42-a1")
+    env = {
+        e["name"]: e["value"]
+        for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+        if "value" in e
+    }
+
+    assert env["AGENTS_NAMESPACE"] == "devloop-test"
+
+
+def test_render_job_omits_agents_namespace_when_unset(monkeypatch):
+    """AGENTS_NAMESPACE absent from the worker env must not appear in the Job
+    container env — the entrypoint's own os.getenv(..., "agents") fallback
+    then matches the worker's NAMESPACE default."""
+    monkeypatch.delenv("AGENTS_NAMESPACE", raising=False)
+
+    d = _dispatch_input()
+    manifest = k8s_jobs.render_job(d, "agent-omneval-execute-42-a1")
+    env_names = {
+        e["name"] for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+
+    assert "AGENTS_NAMESPACE" not in env_names
 
 
 def test_render_job_passes_otlp_overrides_from_env(monkeypatch):

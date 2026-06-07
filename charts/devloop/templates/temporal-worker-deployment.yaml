@@ -48,10 +48,43 @@ spec:
               value: {{ .Values.temporalWorker.webhookPort | quote }}
             - name: PROJECTS_FILE
               value: {{ .Values.temporalWorker.projectsFile | quote }}
-            - name: GATE_TIMEOUT_SECONDS
-              value: {{ .Values.temporalWorker.gateTimeoutSeconds | quote }}
-            - name: QUESTION_TIMEOUT_SECONDS
-              value: {{ .Values.temporalWorker.questionTimeoutSeconds | quote }}
+            - name: MAX_QUESTIONS_PER_PHASE
+              value: {{ .Values.temporalWorker.maxQuestionsPerPhase | default 3 | quote }}
+            - name: CI_FIX_MAX_ITERATIONS
+              value: {{ .Values.temporalWorker.ciFixMaxIterations | default 5 | quote }}
+            - name: EXECUTE_MAX_ITERATIONS
+              value: {{ .Values.temporalWorker.executeMaxIterations | default 1 | quote }}
+            - name: MAX_CONCURRENT_JOBS
+              value: {{ .Values.temporalWorker.maxConcurrentJobs | default 1 | quote }}
+            - name: AGENT_GITHUB_LOGIN
+              value: {{ .Values.temporalWorker.agentGithubLogin | default "devloop-bot" | quote }}
+            {{- with .Values.githubApp.appId }}
+            - name: GITHUB_APP_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.githubApp.privateKeySecret.name }}
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.githubApp.privateKeySecret.name }}
+                  key: {{ .Values.githubApp.privateKeySecret.key }}
+            {{- end }}
+            {{- with .Values.githubApp.installationId }}
+            - name: GITHUB_APP_INSTALLATION_ID
+              value: {{ . | quote }}
+            {{- end }}
+            - name: GIT_AUTHOR_NAME
+              value: {{ .Values.agent.gitName | default "homelab-agent" | quote }}
+            - name: GIT_AUTHOR_EMAIL
+              value: {{ .Values.agent.gitEmail | default "agent@blosshomelab.com" | quote }}
+            - name: SUMMARIZATION_ENABLED
+              value: {{ .Values.summarization.enabled | default true | quote }}
+            - name: SUMMARIZATION_CRON_SCHEDULE
+              value: {{ .Values.summarization.cronSchedule | default "0 8 * * 1" | quote }}
+            {{- with .Values.summarization.webhookUrl }}
+            - name: SUMMARIZATION_WEBHOOK_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.skillsByPhase }}
             - name: AGENT_SKILLS_BY_PHASE
               value: {{ .Values.skillsByPhase | toJson | quote }}

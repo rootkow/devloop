@@ -16,11 +16,8 @@ dependencies = [
     "fastapi>=0.115.6",
     "uvicorn>=0.34.0",
     "openai>=2.41.0",
+    "pyjwt[crypto]>=2.10.1",
 ]
-
-[project.optional-dependencies]
-discord = ["discord.py>=2.4.0"]
-slack = ["slack-bolt>=1.18"]
 
 [dependency-groups]
 dev = [

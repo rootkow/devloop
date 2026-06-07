@@ -87,7 +87,6 @@ def test_getting_started_documents_required_fields():
         "default_branch",
         "agent_image",
         "agent_label",
-        "discord_channel",
         "omneval_ingest_secret",
         "github_token_secret",
     ]
@@ -101,9 +100,32 @@ def test_getting_started_documents_optional_fields():
 
 
 def test_getting_started_documents_config_settings():
-    """Guide must cover GITHUB_TOKEN, Discord bot token, and temporalHost."""
+    """Guide must cover GITHUB_TOKEN and temporalHost."""
     text = (DOCS_DIR / "getting-started.md").read_text()
     text_lower = text.lower()
     assert "github_token" in text_lower
-    assert "discord" in text_lower
     assert "temporalHost" in text
+
+
+def _heading_to_anchor(heading: str) -> str:
+    """Approximate GitHub's Markdown heading-to-anchor slugification."""
+    slug = heading.strip().lower()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    return re.sub(r"\s+", "-", slug)
+
+
+def test_github_app_doc_anchor_links_resolve_to_real_headings():
+    """Anchor links from github-app.md into getting-started.md must match a heading there (issue #91)."""
+    github_app_text = (DOCS_DIR / "github-app.md").read_text()
+    getting_started_text = (DOCS_DIR / "getting-started.md").read_text()
+
+    headings = re.findall(r"^#+\s+(.+)$", getting_started_text, re.MULTILINE)
+    anchors = {_heading_to_anchor(h) for h in headings}
+
+    links = re.findall(r"\(getting-started\.md#([\w-]+)\)", github_app_text)
+    assert links, "expected at least one anchor link from github-app.md into getting-started.md"
+    for anchor in links:
+        assert anchor in anchors, (
+            f"github-app.md links to getting-started.md#{anchor}, "
+            f"but no heading in getting-started.md slugifies to that anchor"
+        )

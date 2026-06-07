@@ -1,4 +1,10 @@
-"""Summarization workflow tests (issue #24)."""
+"""Summarization workflow tests (issue #24, #79).
+
+Discord delivery has been removed from SummarizationWorkflow per issue #72.
+Per issue #79, delivery is now via a `publish_summary` activity that opens a
+GitHub Issue (and optionally POSTs to a webhook). The "post-merge" trigger has
+been removed — `SummarizeInput.trigger` now only accepts "weekly".
+"""
 
 from __future__ import annotations
 
@@ -10,12 +16,7 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from devloop.shared import (
-    MESSAGING_QUEUE,
-    ORCHESTRATION_QUEUE,
-    SendMessageInput,
-    SendMessageOutput,
-)
+from devloop.shared import JOB_DISPATCH_QUEUE, ORCHESTRATION_QUEUE, PublishSummaryInput
 from devloop.summarization import SummarizationWorkflow, SummarizeInput, SummarizeResult
 
 
@@ -25,24 +26,33 @@ class Mocks:
         default_factory=lambda: SummarizeResult(False, "digest", "sha9")
     )
     seen_inputs: list = field(default_factory=list)
-    changelog_posts: list = field(default_factory=list)
+    published: list = field(default_factory=list)
 
 
 M = Mocks()
 
 
-def _activities():
+def _dispatch_activities():
     @activity.defn(name="summarize_changes")
     async def summarize_changes(inp: SummarizeInput) -> SummarizeResult:
         M.seen_inputs.append(inp)
         return M.result
 
-    @activity.defn(name="send_message")
-    async def send_message(inp: SendMessageInput) -> SendMessageOutput:
-        M.changelog_posts.append((inp.channel, inp.message, inp.thread_name))
-        return SendMessageOutput(thread_id="t")
+    return [summarize_changes]
 
-    return [summarize_changes], [send_message]
+
+def _orchestration_activities():
+    @activity.defn(name="publish_summary")
+    async def publish_summary(payload: PublishSummaryInput) -> None:
+        M.published.append(
+            {
+                "project_id": payload.project_id,
+                "summary": payload.summary,
+                "date": payload.date,
+            }
+        )
+
+    return [publish_summary]
 
 
 @pytest.fixture
@@ -53,50 +63,61 @@ def reset_mocks():
 
 
 async def _run(inp: SummarizeInput):
-    orch, disc = _activities()
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with (
-            Worker(
-                env.client,
-                task_queue=ORCHESTRATION_QUEUE,
-                workflows=[SummarizationWorkflow],
-                activities=orch,
-            ),
-            Worker(env.client, task_queue=MESSAGING_QUEUE, activities=disc),
+        async with Worker(
+            env.client,
+            task_queue=ORCHESTRATION_QUEUE,
+            workflows=[SummarizationWorkflow],
+            activities=_orchestration_activities(),
         ):
-            return await env.client.execute_workflow(
-                SummarizationWorkflow.run,
-                inp,
-                id=f"sum-{uuid.uuid4().hex[:8]}",
-                task_queue=ORCHESTRATION_QUEUE,
-            )
-
-
-@pytest.mark.asyncio
-async def test_post_merge_posts_to_changelog(reset_mocks):
-    result = await _run(
-        SummarizeInput(
-            "omneval", trigger="post-merge", head_sha="abc", closed_issues=[1, 2]
-        )
-    )
-    assert result.skipped is False
-    assert M.changelog_posts, "expected a #changelog post"
-    channel, message, title = M.changelog_posts[0]
-    assert channel == "changelog"
-    assert message == "digest"
-    assert "post-merge" in title
+            async with Worker(
+                env.client,
+                task_queue=JOB_DISPATCH_QUEUE,
+                workflows=[],
+                activities=_dispatch_activities(),
+            ):
+                return await env.client.execute_workflow(
+                    SummarizationWorkflow.run,
+                    inp,
+                    id=f"sum-{uuid.uuid4().hex[:8]}",
+                    task_queue=ORCHESTRATION_QUEUE,
+                )
 
 
 @pytest.mark.asyncio
 async def test_weekly_trigger(reset_mocks):
-    await _run(SummarizeInput("omneval", trigger="weekly"))
+    """Weekly trigger is passed through to the summarize_changes activity."""
+    result = await _run(SummarizeInput("omneval", trigger="weekly"))
     assert M.seen_inputs[0].trigger == "weekly"
-    assert "weekly" in M.changelog_posts[0][2]
+    assert result.summary == "digest"
 
 
 @pytest.mark.asyncio
-async def test_dedup_skip_does_not_post(reset_mocks):
+async def test_weekly_trigger_publishes_summary(reset_mocks):
+    """After a successful summary, the workflow calls publish_summary with the
+    project_id, summary text, and a date."""
+    result = await _run(SummarizeInput("omneval", trigger="weekly"))
+    assert result.summary == "digest"
+    assert len(M.published) == 1
+    payload = M.published[0]
+    assert payload["project_id"] == "omneval"
+    assert payload["summary"] == "digest"
+    assert "date" in payload and payload["date"]
+
+
+@pytest.mark.asyncio
+async def test_dedup_skip_returns_skipped(reset_mocks):
+    """When summarize_changes returns skipped=True the workflow propagates it
+    and does NOT call publish_summary."""
     reset_mocks.result = SummarizeResult(skipped=True)
     result = await _run(SummarizeInput("omneval", trigger="weekly"))
     assert result.skipped is True
-    assert M.changelog_posts == []  # nothing new -> no changelog spam
+    assert result.summary == ""
+    assert M.published == []
+
+
+def test_summarize_input_rejects_post_merge_trigger():
+    """SummarizeInput no longer accepts 'post-merge' (issue #79: SummarizationWorkflow
+    is no longer invoked from DevLoopWorkflow as a post-merge child workflow)."""
+    with pytest.raises(ValueError):
+        SummarizeInput("omneval", trigger="post-merge", head_sha="abc", closed_issues=[1, 2])

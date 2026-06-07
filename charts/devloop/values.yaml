@@ -105,109 +105,91 @@ temporalWorker:
   webhookPort: 8088
   # Path to projects registry file (mounted as ConfigMap or secret)
   projectsFile: "/etc/projects/projects.yaml"
-  # Human-approval gate timeout, in seconds, for the plan and merge gates.
-  # When a gate waits this long without a reply the loop stops blocking: the
-  # plan gate pauses the run and the merge gate leaves the PR open and moves on.
-  # Without it a forgotten approval parks the run forever and (because the
-  # webhook reuses the devloop-<project> workflow id) silently drops later
-  # issues. Mirrors DevLoopInput.gate_timeout_seconds — keep the two in sync.
-  # Default: 14400 (4h).
-  gateTimeoutSeconds: 14400
-  # Timeout, in seconds, for a mid-run clarifying question gate.
-  # Mirrors DevLoopInput.question_timeout_seconds. Default: 14400 (4h).
-  questionTimeoutSeconds: 14400
+  # Maximum number of mid-run AWAITING_HUMAN questions a single phase run may
+  # spawn Phase.ANSWER agent jobs for before the workflow stops asking and
+  # tells the parked job to proceed with its best guess.
+  # Mirrors DevLoopInput.max_questions_per_phase. Default: 3.
+  maxQuestionsPerPhase: 3
+  # Maximum number of Phase.CI_FIX retry attempts the _ci_fix_loop will spend
+  # trying to turn a PR's failing CI checks green before giving up and handing
+  # it to the human reviewer with a "CI still failing" note.
+  # Mirrors DevLoopInput.ci_fix_max_iterations. Default: 5.
+  ciFixMaxIterations: 5
+  # Maximum number of Execute Agent Execution Job dispatch attempts the
+  # _execute_phase retry loop will spend when a dispatch produces zero commits,
+  # before parking the issue with a "skipping this round" comment.
+  # Mirrors DevLoopInput.execute_max_iterations. Default: 1.
+  executeMaxIterations: 1
+  # Maximum number of Agent Execution Job dispatches (and LLM-bearing activities)
+  # that may run concurrently across all workflow types and projects.
+  # Forwarded to the job-dispatch Worker as MAX_CONCURRENT_JOBS.
+  # Set higher when the inference backend can serve multiple requests in parallel.
+  maxConcurrentJobs: 1
+  # GitHub login of the devloop-bot account. Used by the webhook receiver to
+  # filter out the bot's own comments/reviews so they don't re-trigger
+  # PRCommentWorkflow. Forwarded to the worker as AGENT_GITHUB_LOGIN.
+  agentGithubLogin: "devloop-bot"
   # Replica count
   replicas: 1
 
 # ---------------------------------------------------------------------------
-# Discord Bot
+# GitHub App authentication (issue #81)
 # ---------------------------------------------------------------------------
-discordBot:
-  enabled: true
-  image:
-    repository: ghcr.io/omneval/devloop-discord-bot
-    tag: "latest"
-    pullPolicy: IfNotPresent
-  # Discord bot token. Prefer `tokenSecret` (a Kubernetes Secret reference) over
-  # the plain `token` value, which is only suitable for local/dev use.
-  token: ""
-  # tokenSecret: { name: "discord-bot", key: "TOKEN" }
-  tokenSecret: {}
-  # Optional Discord application ID, sourced from a Secret the same way.
-  # applicationIdSecret: { name: "discord-bot", key: "APPLICATION_ID" }
-  applicationIdSecret: {}
-  # ServiceAccount for the discord-bot pod.
-  # When create: true, the chart creates the SA, a Role allowing the bot to
-  # create and update the thread-map ConfigMap, and a RoleBinding.
-  serviceAccount:
-    create: true
-    name: ""         # defaults to <release>-discord-bot
-    annotations: {}
-  # Image pull secrets for a private bot image.
-  imagePullSecrets: []
-  # Name of the pre-existing ConfigMap used to persist workflow↔thread mappings.
-  # The chart injects this as CONFIGMAP_NAME and K8S_NAMESPACE automatically so
-  # operators no longer need extraEnv for either.
-  threadMapConfigMap: "discord-bot-threads"
-  # Discord channel IDs for each notification category.
-  # Run: discord channel → "Copy ID" (Developer Mode must be enabled).
-  channels:
-    approvals: ""    # DISCORD_CHANNEL_APPROVALS — where plan/merge gates are posted
-    alerts: ""       # DISCORD_CHANNEL_ALERTS    — where alert notifications land
-    changelog: ""    # DISCORD_CHANNEL_CHANGELOG — where summaries are posted
-  # Extra environment variables appended verbatim (e.g. non-standard channel names).
-  # Channel IDs are now first-class values above — they no longer need extraEnv.
-  extraEnv: []
-  # Resource limits
-  resources: {}
-  #   requests:
-  #     cpu: 100m
-  #     memory: 128Mi
-  #   limits:
-  #     cpu: 200m
-  #     memory: 256Mi
-  # Task queue for discord-bot activities
-  taskQueue: "discord-bot"
-  # Health probe port
-  healthPort: 8080
-  # Replica count
-  replicas: 1
+# Recommended replacement for the per-project fine-grained PAT
+# (`github_token_secret`): devloop-bot authenticates as a GitHub App and mints
+# short-lived (1h) installation access tokens on demand from an RSA private
+# key, refreshed 5 minutes before they expire. See docs/github-app.md for the
+# app manifest / required permission set (Contents rw, Pull requests rw,
+# Issues rw, Checks read) and full setup instructions.
+#
+# Opt-in and fully backward compatible: devloop only switches to GitHub App
+# auth when BOTH appId and privateKeySecret resolve to a non-empty value —
+# otherwise it falls back to each project's `github_token_secret` PAT exactly
+# as before. Leave this section empty/unset to keep using PATs.
+githubApp:
+  # GitHub App ID (shown on the app's settings page). Forwarded as
+  # GITHUB_APP_ID.
+  appId: ""
+  # Reference to a K8s Secret holding the App's RSA private key (the .pem
+  # downloaded when generating a private key for the app). Forwarded as
+  # GITHUB_APP_PRIVATE_KEY via secretKeyRef.
+  # privateKeySecret: { name: devloop-github-app-key, key: privateKey }
+  privateKeySecret: {}
+  # Installation ID selecting which installation of the app to mint tokens
+  # for (the numeric segment of
+  # https://github.com/settings/installations/<installation_id>). Forwarded
+  # as GITHUB_APP_INSTALLATION_ID.
+  installationId: ""
 
 # ---------------------------------------------------------------------------
-# GitHub Issue Poller(s)
+# Agent Execution Job identity
 # ---------------------------------------------------------------------------
-# Each entry creates a separate poller deployment for one repository.
-# GITHUB_TOKEN is shared across all pollers; repo-specific fields are per-entry.
-poller:
+# Git author identity used by Agent Execution Jobs when committing to enrolled
+# repositories. Forwarded to the agent container as GIT_AUTHOR_NAME /
+# GIT_AUTHOR_EMAIL (consumed by `git config user.name` / `user.email`).
+agent:
+  gitName: "homelab-agent"
+  gitEmail: "agent@blosshomelab.com"
+
+# ---------------------------------------------------------------------------
+# Weekly Summarization
+# ---------------------------------------------------------------------------
+# Controls the weekly Summarization workflow / Temporal Schedule (issue #24, #79).
+# Delivery defaults to opening a GitHub Issue (label `devloop-summary`, opened by
+# devloop-bot) on each enrolled repo — no extra config required. An optional
+# outbound webhook can also receive the digest as JSON for push notifications.
+summarization:
+  # When false, ensure_schedules does not create the weekly summarization
+  # schedule for any project — and deletes any existing one.
   enabled: true
-  # Shared GitHub token for all poller instances. Prefer `githubTokenSecret`
-  # (a Kubernetes Secret reference) over the plain `githubToken` value.
-  githubToken: ""
-  # githubTokenSecret: { name: "agent-github-token", key: "GITHUB_TOKEN" }
-  githubTokenSecret: {}
-  image:
-    repository: ghcr.io/omneval/devloop-poller
-    tag: "latest"
-    pullPolicy: IfNotPresent
-  # Image pull secrets for a private poller image.
-  imagePullSecrets: []
-  # Resource limits (applied to all poller instances)
-  resources: {}
-  #   requests:
-  #     cpu: 50m
-  #     memory: 64Mi
-  #   limits:
-  #     cpu: 100m
-  #     memory: 128Mi
-  # Health probe port
-  healthPort: 8080
-  # Seconds between poll cycles
-  pollIntervalSeconds: 300
-  # List of project configs. Each creates one poller deployment.
-  #   - repo:       full GitHub repo name (e.g. "omneval/omneval")
-  #   - label:      the agent trigger label (default: "agent-ready")
-  #   - webhookUrl: URL of the temporal-worker webhook endpoint
-  projects: []
-  #   - repo: "org/repo"
-  #     label: "agent-ready"
-  #     webhookUrl: "http://devloop-temporal-worker.default.svc.cluster.local:8088/webhook/github"
+  # 5-field cron expression (minute hour day-of-month month day-of-week).
+  # Forwarded to the Temporal ScheduleCalendarSpec (or parsed into one).
+  # Default: Monday 08:00. Only plain integers and "*" are supported per field;
+  # anything richer falls back to the default Monday-08:00 schedule.
+  cronSchedule: "0 8 * * 1"
+  # Optional outbound webhook URL. When set, `publish_summary` POSTs
+  # {"project_id": ..., "summary": ..., "date": ...} as JSON to this URL in
+  # addition to opening the GitHub Issue (fire-and-forget; failures are logged
+  # but do not fail the workflow). Forwarded as SUMMARIZATION_WEBHOOK_URL.
+  webhookUrl: ""
+
