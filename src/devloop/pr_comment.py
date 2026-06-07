@@ -81,7 +81,9 @@ class PRCommentInput:
             comment_body=comment_body,
             source=source,
             author=author,
-            ci_fix_max_iterations=_int("CI_FIX_MAX_ITERATIONS", cls.ci_fix_max_iterations),
+            ci_fix_max_iterations=_int(
+                "CI_FIX_MAX_ITERATIONS", cls.ci_fix_max_iterations
+            ),
         )
 
 
@@ -200,4 +202,3 @@ class PRCommentWorkflow(_WorkflowCommon):
             commits=result.commits,
             exhausted=exhausted,
         )
-
