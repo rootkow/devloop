@@ -352,3 +352,136 @@ def test_resolve_skills_multiple_skills_from_disk(monkeypatch, tmp_path):
     assert "skill-alpha" in resolved_names
     assert "skill-beta" in resolved_names
     assert skipped == []
+
+
+# --------------------------------------------------------------------------- #
+# install_configmap_skills tests (issue #34)
+# --------------------------------------------------------------------------- #
+
+
+def test_install_configmap_skills_copies_staging_to_convergence(monkeypatch, tmp_path):
+    """Skills staged as <name>.md files are installed as <convergence>/<name>/SKILL.md."""
+    skills_mod = _import_skills()
+    monkeypatch.delenv("AGENT_SKILLS_DIR", raising=False)
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    convergence = tmp_path / "convergence"
+
+    # ConfigMap mounts one file per skill (the key is the skill name).
+    (staging / "deploy-review").write_text("# Deploy Review Skill\nContent here.\n")
+    (staging / "code-refactor").write_text("# Code Refactor Skill\nAnother skill.\n")
+
+    monkeypatch.setenv("AGENT_SKILLS_DIR", str(convergence))
+
+    installed = skills_mod.install_configmap_skills(str(staging))
+
+    assert sorted(installed) == ["code-refactor", "deploy-review"]
+    assert (
+        convergence / "deploy-review" / "SKILL.md"
+    ).read_text() == "# Deploy Review Skill\nContent here.\n"
+    assert (
+        convergence / "code-refactor" / "SKILL.md"
+    ).read_text() == "# Code Refactor Skill\nAnother skill.\n"
+
+
+def test_install_configmap_skills_overrides_baked_skill_on_collision(
+    monkeypatch, tmp_path
+):
+    """A ConfigMap skill with the same name as a baked skill overwrites it."""
+    skills_mod = _import_skills()
+    monkeypatch.delenv("AGENT_SKILLS_DIR", raising=False)
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    convergence = tmp_path / "convergence"
+
+    # Pre-seed a baked skill
+    baked_dir = convergence / "deploy-review"
+    baked_dir.mkdir(parents=True)
+    (baked_dir / "SKILL.md").write_text("# Baked Deploy Review\nOriginal content.\n")
+
+    # ConfigMap delivers a skill with the same name
+    (staging / "deploy-review").write_text(
+        "# ConfigMap Deploy Review\nOverridden content.\n"
+    )
+
+    monkeypatch.setenv("AGENT_SKILLS_DIR", str(convergence))
+
+    installed = skills_mod.install_configmap_skills(str(staging))
+
+    assert installed == ["deploy-review"]
+    assert (
+        convergence / "deploy-review" / "SKILL.md"
+    ).read_text() == "# ConfigMap Deploy Review\nOverridden content.\n"
+
+
+def test_install_configmap_skills_skips_bad_skill_and_installs_others(
+    monkeypatch, tmp_path
+):
+    """A failure writing one skill is logged and skipped; other skills install fine.
+
+    We patch shutil.copy2 to raise OSError for the bad-skill so the test is
+    deterministic regardless of the host user (root bypasses permission checks).
+    """
+    import shutil as _shutil
+    import unittest.mock
+
+    skills_mod = _import_skills()
+    monkeypatch.delenv("AGENT_SKILLS_DIR", raising=False)
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    convergence = tmp_path / "convergence"
+
+    (staging / "good-skill").write_text("# Good\n")
+    (staging / "bad-skill").write_text("# Bad\n")
+
+    monkeypatch.setenv("AGENT_SKILLS_DIR", str(convergence))
+
+    original_copy2 = _shutil.copy2
+
+    def flaky_copy2(src, dst):
+        if "bad-skill" in str(dst):
+            raise OSError("simulated write failure")
+        return original_copy2(src, dst)
+
+    with unittest.mock.patch.object(_shutil, "copy2", side_effect=flaky_copy2):
+        installed = skills_mod.install_configmap_skills(str(staging))
+
+    assert "good-skill" in installed
+    assert "bad-skill" not in installed
+
+
+def test_install_configmap_skills_returns_empty_when_staging_missing(
+    monkeypatch, tmp_path
+):
+    """When the staging path doesn't exist, no skills are installed."""
+    skills_mod = _import_skills()
+    monkeypatch.delenv("AGENT_SKILLS_DIR", raising=False)
+
+    installed = skills_mod.install_configmap_skills(str(tmp_path / "nonexistent"))
+
+    assert installed == []
+
+
+def test_install_configmap_skills_skips_subdirectories_in_staging(
+    monkeypatch, tmp_path
+):
+    """Non-file entries in the staging directory are skipped."""
+    skills_mod = _import_skills()
+    monkeypatch.delenv("AGENT_SKILLS_DIR", raising=False)
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    convergence = tmp_path / "convergence"
+
+    (staging / "my-skill").write_text("# Skill\n")
+    (staging / "subdir").mkdir()  # should be skipped
+
+    monkeypatch.setenv("AGENT_SKILLS_DIR", str(convergence))
+
+    installed = skills_mod.install_configmap_skills(str(staging))
+
+    assert installed == ["my-skill"]
+    assert (convergence / "my-skill" / "SKILL.md").exists()
