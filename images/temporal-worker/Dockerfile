@@ -22,14 +22,31 @@ WORKDIR /app
 # Runtime dependencies (just omneval-devloop) are declared in pyproject.toml.
 # SDK_VERSION pins omneval-devloop to the exact release when set (release builds);
 # empty on continuous builds, which take the latest release.
+#
+# wait_for_pypi.py (release.yml) confirms the pinned SDK is queryable before this
+# build starts, but PyPI fronts its index with a CDN whose edges propagate a fresh
+# publish independently — uv's resolver can still hit a stale edge for a short
+# window right after the version becomes "queryable" elsewhere. Retry the install
+# itself (the thing that actually observes uv's view of the index) rather than
+# trying to predict propagation from the outside.
 ARG SDK_VERSION=
 COPY pyproject.toml ./
 RUN if [ -n "$SDK_VERSION" ]; then \
         echo "omneval-devloop==$SDK_VERSION" > /tmp/sdk-constraint.txt; \
     fi; \
-    UV_HTTP_TIMEOUT=300 uv pip install --system --no-cache \
-        ${SDK_VERSION:+--constraint /tmp/sdk-constraint.txt} . \
-    && rm -f /tmp/sdk-constraint.txt
+    n=0; \
+    until UV_HTTP_TIMEOUT=300 uv pip install --system --no-cache \
+            ${SDK_VERSION:+--constraint /tmp/sdk-constraint.txt} .; do \
+        n=$((n + 1)); \
+        if [ "$n" -ge 6 ]; then \
+            echo "uv pip install failed after $n attempts (PyPI index propagation?)" >&2; \
+            rm -f /tmp/sdk-constraint.txt; \
+            exit 1; \
+        fi; \
+        echo "uv pip install failed (attempt $n/6) — PyPI index may not have fully propagated yet; retrying in 30s" >&2; \
+        sleep 30; \
+    done; \
+    rm -f /tmp/sdk-constraint.txt
 
 # /healthz (Kubernetes probes) and the webhook receiver port.
 EXPOSE 8080 8088

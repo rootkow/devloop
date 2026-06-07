@@ -53,15 +53,31 @@ RUN curl -fsSL --retry 5 --retry-delay 5 --max-time 300 \
 # pipeline (release.yml) passes the tag version and only builds this image after
 # the PyPI publish has landed, so the baked SDK always matches the image's semver
 # tag. Left empty on continuous (main) builds, where the latest release is used.
+# wait_for_pypi.py (release.yml) confirms the pinned SDK is queryable before this
+# build starts, but PyPI fronts its index with a CDN whose edges propagate a fresh
+# publish independently — uv's resolver can still hit a stale edge for a short
+# window right after the version becomes "queryable" elsewhere. Retry the install
+# itself (the thing that actually observes uv's view of the index) rather than
+# trying to predict propagation from the outside.
 ARG SDK_VERSION=
 COPY pyproject.toml /tmp/agent-base/pyproject.toml
 RUN if [ -n "$SDK_VERSION" ]; then \
         echo "omneval-devloop==$SDK_VERSION" > /tmp/sdk-constraint.txt; \
     fi; \
-    UV_HTTP_TIMEOUT=300 uv pip install --system --no-cache \
-        ${SDK_VERSION:+--constraint /tmp/sdk-constraint.txt} \
-        /tmp/agent-base \
-    && rm -rf /tmp/agent-base /tmp/sdk-constraint.txt
+    n=0; \
+    until UV_HTTP_TIMEOUT=300 uv pip install --system --no-cache \
+            ${SDK_VERSION:+--constraint /tmp/sdk-constraint.txt} \
+            /tmp/agent-base; do \
+        n=$((n + 1)); \
+        if [ "$n" -ge 6 ]; then \
+            echo "uv pip install failed after $n attempts (PyPI index propagation?)" >&2; \
+            rm -rf /tmp/agent-base /tmp/sdk-constraint.txt; \
+            exit 1; \
+        fi; \
+        echo "uv pip install failed (attempt $n/6) — PyPI index may not have fully propagated yet; retrying in 30s" >&2; \
+        sleep 30; \
+    done; \
+    rm -rf /tmp/agent-base /tmp/sdk-constraint.txt
 
 # Agent Execution Job entrypoint (issues #18/#19). Project repos are cloned at
 # runtime; this is the only application code baked into the image.
