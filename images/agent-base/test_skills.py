@@ -360,7 +360,7 @@ def test_resolve_skills_multiple_skills_from_disk(monkeypatch, tmp_path):
 
 
 def test_install_configmap_skills_copies_staging_to_convergence(monkeypatch, tmp_path):
-    """Skills staged as <name>.md files are installed as <convergence>/<name>/SKILL.md."""
+    """Skills staged as <name>/SKILL.md (K8s ConfigMap mount layout) are installed."""
     skills_mod = _import_skills()
     monkeypatch.delenv("AGENT_SKILLS_DIR", raising=False)
 
@@ -368,9 +368,15 @@ def test_install_configmap_skills_copies_staging_to_convergence(monkeypatch, tmp
     staging.mkdir()
     convergence = tmp_path / "convergence"
 
-    # ConfigMap mounts one file per skill (the key is the skill name).
-    (staging / "deploy-review").write_text("# Deploy Review Skill\nContent here.\n")
-    (staging / "code-refactor").write_text("# Code Refactor Skill\nAnother skill.\n")
+    # K8s mounts ConfigMap keys with '/' as <name>/SKILL.md subdirectories.
+    (staging / "deploy-review").mkdir()
+    (staging / "deploy-review" / "SKILL.md").write_text(
+        "# Deploy Review Skill\nContent here.\n"
+    )
+    (staging / "code-refactor").mkdir()
+    (staging / "code-refactor" / "SKILL.md").write_text(
+        "# Code Refactor Skill\nAnother skill.\n"
+    )
 
     monkeypatch.setenv("AGENT_SKILLS_DIR", str(convergence))
 
@@ -401,8 +407,9 @@ def test_install_configmap_skills_overrides_baked_skill_on_collision(
     baked_dir.mkdir(parents=True)
     (baked_dir / "SKILL.md").write_text("# Baked Deploy Review\nOriginal content.\n")
 
-    # ConfigMap delivers a skill with the same name
-    (staging / "deploy-review").write_text(
+    # ConfigMap delivers a skill with the same name (K8s subdirectory layout)
+    (staging / "deploy-review").mkdir()
+    (staging / "deploy-review" / "SKILL.md").write_text(
         "# ConfigMap Deploy Review\nOverridden content.\n"
     )
 
@@ -434,8 +441,10 @@ def test_install_configmap_skills_skips_bad_skill_and_installs_others(
     staging.mkdir()
     convergence = tmp_path / "convergence"
 
-    (staging / "good-skill").write_text("# Good\n")
-    (staging / "bad-skill").write_text("# Bad\n")
+    (staging / "good-skill").mkdir()
+    (staging / "good-skill" / "SKILL.md").write_text("# Good\n")
+    (staging / "bad-skill").mkdir()
+    (staging / "bad-skill" / "SKILL.md").write_text("# Bad\n")
 
     monkeypatch.setenv("AGENT_SKILLS_DIR", str(convergence))
 
@@ -465,10 +474,10 @@ def test_install_configmap_skills_returns_empty_when_staging_missing(
     assert installed == []
 
 
-def test_install_configmap_skills_skips_subdirectories_in_staging(
+def test_install_configmap_skills_skips_subdirs_without_skill_md(
     monkeypatch, tmp_path
 ):
-    """Non-file entries in the staging directory are skipped."""
+    """Subdirectories without a SKILL.md file are skipped."""
     skills_mod = _import_skills()
     monkeypatch.delenv("AGENT_SKILLS_DIR", raising=False)
 
@@ -476,8 +485,9 @@ def test_install_configmap_skills_skips_subdirectories_in_staging(
     staging.mkdir()
     convergence = tmp_path / "convergence"
 
-    (staging / "my-skill").write_text("# Skill\n")
-    (staging / "subdir").mkdir()  # should be skipped
+    (staging / "my-skill").mkdir()
+    (staging / "my-skill" / "SKILL.md").write_text("# Skill\n")
+    (staging / "empty-dir").mkdir()  # no SKILL.md — should be skipped
 
     monkeypatch.setenv("AGENT_SKILLS_DIR", str(convergence))
 
