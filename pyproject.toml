@@ -17,6 +17,7 @@ dependencies = [
     "uvicorn>=0.34.0",
     "openai>=2.41.0",
     "pyjwt[crypto]>=2.10.1",
+    "docker>=7.1.0",
     # Workflow KPI span emission (issue #122). The kpi module degrades to a
     # log line if these are absent, but the reference worker ships them.
     "opentelemetry-sdk>=1.27",
