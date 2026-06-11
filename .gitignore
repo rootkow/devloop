@@ -227,3 +227,4 @@ __marimo__/
 # Helm dependency archives (fetched by 'helm dependency build'; Chart.lock is committed)
 charts/devloop/charts/*.tgz
 agents/projects.yaml
+minikube/

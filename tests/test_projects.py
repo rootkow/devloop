@@ -75,7 +75,6 @@ def test_multiple_projects(tmp_path):
         "github_url",
         "default_branch",
         "agent_label",
-        "omneval_ingest_secret",
         "github_token_secret",
     ],
 )
@@ -104,6 +103,21 @@ def test_agent_image_is_optional(tmp_path):
 
     configs = load_projects(path)
     assert configs[0].agent_image == ""
+
+
+def test_omneval_ingest_secret_is_optional(tmp_path):
+    """A project entry without omneval_ingest_secret loads with an empty
+    string — KPI span emission is skipped (best-effort), so users without an
+    omneval/omneval instance don't need this field."""
+    import yaml
+
+    data = yaml.safe_load(_VALID_YAML)
+    del data["projects"][0]["omneval_ingest_secret"]
+    path = tmp_path / "projects.yaml"
+    path.write_text(yaml.dump(data))
+
+    configs = load_projects(path)
+    assert configs[0].omneval_ingest_secret == ""
 
 
 def test_agent_runner_is_optional_and_parsed(tmp_path):

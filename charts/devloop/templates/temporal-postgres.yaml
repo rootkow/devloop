@@ -1,0 +1,96 @@
+{{- if and .Values.temporal.enabled .Values.temporal.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-postgres
+  labels:
+    {{- include "devloop.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-postgres
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+  selector:
+    app.kubernetes.io/component: temporal-postgres
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+{{- if .Values.temporal.postgres.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: temporal-postgres
+  labels:
+    {{- include "devloop.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.temporal.postgres.persistence.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.temporal.postgres.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-postgres
+  labels:
+    {{- include "devloop.labels" . | nindent 4 }}
+    app.kubernetes.io/component: temporal-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: temporal-postgres
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "devloop.labels" . | nindent 8 }}
+        app.kubernetes.io/component: temporal-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.temporal.postgres.image.repository }}:{{ .Values.temporal.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.temporal.postgres.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.temporal.postgres.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.temporal.postgres.user | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.temporal.postgres.password | quote }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.temporal.postgres.user | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.temporal.postgres.user | quote }}]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: data
+          {{- if .Values.temporal.postgres.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: temporal-postgres
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

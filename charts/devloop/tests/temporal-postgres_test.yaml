@@ -1,0 +1,60 @@
+suite: temporal postgres
+templates:
+  - templates/temporal-postgres.yaml
+tests:
+  - it: renders nothing when temporal.enabled is false
+    set:
+      temporal.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when temporal.postgres.enabled is false
+    set:
+      temporal.enabled: true
+      temporal.postgres.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a Service, Deployment with emptyDir, and no PVC by default
+    set:
+      temporal.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Service
+      - documentIndex: 1
+        isKind:
+          of: Deployment
+      - documentIndex: 1
+        contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            emptyDir: {}
+
+  - it: renders a PVC and mounts it when persistence is enabled
+    set:
+      temporal.enabled: true
+      temporal.postgres.persistence.enabled: true
+      temporal.postgres.persistence.size: 5Gi
+    asserts:
+      - hasDocuments:
+          count: 3
+      - documentIndex: 1
+        isKind:
+          of: PersistentVolumeClaim
+      - documentIndex: 1
+        equal:
+          path: spec.resources.requests.storage
+          value: 5Gi
+      - documentIndex: 2
+        contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: temporal-postgres

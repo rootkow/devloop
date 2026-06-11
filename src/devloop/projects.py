@@ -20,7 +20,6 @@ _REQUIRED_FIELDS = (
     "github_url",
     "default_branch",
     "agent_label",
-    "omneval_ingest_secret",
     "github_token_secret",
 )
 
@@ -31,11 +30,14 @@ class ProjectConfig:
     github_url: str
     default_branch: str
     agent_label: str
-    omneval_ingest_secret: str
     # Secret (agents ns, key "GITHUB_TOKEN") holding this project's scoped GitHub
     # token. Per-project so each org/owner gets its own credential — the worker
     # resolves it per project and the Agent Execution Job mounts it.
     github_token_secret: str
+    # K8s secret name (key "api-key") for the omneval OTLP ingest. Optional —
+    # empty means KPI span emission is skipped (best-effort, never blocks the
+    # workflow). Users without an omneval/omneval instance can omit this.
+    omneval_ingest_secret: str = ""
     # GitHub login tagged for review on the PR the merge phase opens (assignee +
     # @-mention). Optional; empty means the merge phase opens the PR untagged.
     pr_reviewer: str = ""
@@ -73,7 +75,7 @@ def load_projects(path: str | Path) -> list[ProjectConfig]:
                 default_branch=entry["default_branch"],
                 agent_image=entry.get("agent_image", ""),
                 agent_label=entry["agent_label"],
-                omneval_ingest_secret=entry["omneval_ingest_secret"],
+                omneval_ingest_secret=entry.get("omneval_ingest_secret", ""),
                 github_token_secret=entry["github_token_secret"],
                 pr_reviewer=entry.get("pr_reviewer", ""),
                 agent_runner=entry.get("agent_runner", ""),

@@ -17,21 +17,72 @@ temporalHost: ""
 # Production recommendation: run Temporal externally with real persistence
 # (see docs/temporal-prerequisites.md) and set `temporalHost` instead. The
 # defaults below are the upstream chart's minimal single-node evaluation
-# profile (one server replica, single-node Cassandra, no Elasticsearch /
-# Prometheus / Grafana).
+# profile (one server replica, backed by the lightweight Postgres deployment
+# below — see temporal.postgres).
 temporal:
   enabled: false
+  # Fixed (not derived from the release name) to avoid a resource-name
+  # collision: the upstream chart names its own internal "worker" component
+  # `<fullname>-worker`, which would otherwise be `<release>-temporal-worker`
+  # — identical to devloop's own `<release>-temporal-worker` Deployment.
+  # `devloop.temporalHost` (_helpers.tpl) derives the frontend Service address
+  # from this same value, so they always stay in sync.
+  fullnameOverride: "temporal"
   server:
     replicaCount: 1
-  cassandra:
     config:
-      cluster_size: 1
-  elasticsearch:
-    enabled: false
-  prometheus:
-    enabled: false
-  grafana:
-    enabled: false
+      persistence:
+        defaultStore: default
+        visibilityStore: visibility
+        numHistoryShards: 512
+        datastores:
+          default:
+            sql:
+              pluginName: postgres12
+              databaseName: temporal
+              connectAddr: "temporal-postgres:5432"
+              connectProtocol: "tcp"
+              user: temporal
+              password: temporal
+          visibility:
+            sql:
+              pluginName: postgres12
+              databaseName: temporal_visibility
+              connectAddr: "temporal-postgres:5432"
+              connectProtocol: "tcp"
+              user: temporal
+              password: temporal
+      namespaces:
+        create: true
+        namespace:
+          - name: default
+            retention: 3d
+  # The schema-setup Job's default (helm.sh/hook: pre-install,pre-upgrade)
+  # would run before devloop's own templates — including the
+  # temporal-postgres Service below — are created, so its DNS lookup of
+  # temporal-postgres fails outright. Disabling Helm hooks makes it a normal
+  # resource, applied alongside (and retried via its backoffLimit until)
+  # temporal-postgres is up.
+  schema:
+    useHelmHooks: false
+  # Minimal single-replica Postgres backing the persistence config above.
+  # Demo-grade only: ephemeral by default (emptyDir), no HA, no automated
+  # backups. Set persistence.enabled: true for a PVC if data needs to survive
+  # pod restarts. Rendered only when both temporal.enabled and
+  # temporal.postgres.enabled are true (templates/temporal-postgres.yaml).
+  postgres:
+    enabled: true
+    image:
+      repository: postgres
+      tag: "16-alpine"
+      pullPolicy: IfNotPresent
+    database: temporal
+    user: temporal
+    password: temporal
+    persistence:
+      enabled: false
+      size: 1Gi
+      storageClassName: ""
 
 # Namespace where Agent Execution Jobs (and their output ConfigMaps) are created.
 # Defaults to the Helm release namespace (.Release.Namespace) so that a standard
@@ -261,6 +312,13 @@ temporalWorker:
   # filter out the bot's own comments/reviews so they don't re-trigger
   # PRCommentWorkflow. Forwarded to the worker as AGENT_GITHUB_LOGIN.
   agentGithubLogin: "devloop-bot"
+  # Reference to a K8s Secret holding the GitHub webhook HMAC secret (the same
+  # value configured as the webhook's "Secret" in GitHub). Forwarded as
+  # GITHUB_WEBHOOK_SECRET via secretKeyRef. Required in practice — without it
+  # the webhook receiver accepts unsigned deliveries from anyone who finds the
+  # endpoint, but the chart does not enforce setting it.
+  # githubWebhookSecret: { name: github-webhook-secret, key: secret }
+  githubWebhookSecret: {}
   # Replica count
   replicas: 1
 

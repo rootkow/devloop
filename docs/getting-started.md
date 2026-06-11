@@ -391,7 +391,9 @@ docker tag ghcr.io/your-org/your-project-agent:latest \
 The Project Registry tells devloop which repositories to monitor. Create a `projects.yaml` file:
 
 **Minimal example** (required fields only — `agent_image` is optional and
-defaults to the published `devloop-agent-universal`):
+defaults to the published `devloop-agent-universal`, and
+`omneval_ingest_secret` is optional and only needed if you run an
+[omneval/omneval](https://github.com/omneval/omneval) ingest instance):
 
 ```yaml
 projects:
@@ -399,11 +401,11 @@ projects:
     github_url: https://github.com/your-org/your-project
     default_branch: main
     agent_label: agent-ready
-    omneval_ingest_secret: omneval-ingest-your-project
     github_token_secret: your-project-github-token
 ```
 
-**Full example** (with the optional `agent_image` and `pr_reviewer`):
+**Full example** (with the optional `agent_image`, `pr_reviewer`, and
+`omneval_ingest_secret`):
 
 ```yaml
 projects:
@@ -412,10 +414,34 @@ projects:
     default_branch: main
     agent_image: ghcr.io/your-org/your-project-agent:latest
     agent_label: agent-ready
-    omneval_ingest_secret: omneval-ingest-your-project
     github_token_secret: your-project-github-token
     pr_reviewer: "your-github-reviewer-username"
+    omneval_ingest_secret: omneval-ingest-your-project
 ```
+
+#### Create the per-project GitHub token
+
+`github_token_secret` names a Kubernetes Secret holding a token that Agent
+Execution Jobs use for `git clone`/`git push` against the enrolled
+repository — **this token is required regardless of which GitHub
+authentication mode you chose in Step 3**, since App installation tokens
+expire too quickly to mount into jobs.
+
+1. Go to **Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens → Generate new token**.
+2. Set **Repository access** to "Only select repositories" and choose the
+   repo(s) you're enrolling.
+3. Grant **Repository permissions**:
+   - **Contents**: Read and write
+   - **Workflows**: Read and write — required if the agent will ever push
+     branches that touch `.github/workflows/*`; without it, those pushes are
+     rejected with an opaque "exit status 1"
+   - If you're on the **PAT fallback** path (no GitHub App configured), also
+     add **Pull requests**, **Issues**, and **Checks** as described in
+     [Step 3's fallback section](#fallback--fine-grained-pat-quick-evaluation-only)
+     — the worker uses this same token for those API calls too.
+4. Click **Generate token** and copy the value — you'll pass it as
+   `$GITHUB_TOKEN` when creating the Secret in Step 6b.
 
 ### 6b: Create Kubernetes Secrets
 
@@ -434,11 +460,6 @@ kubectl create secret generic your-project-github-token \
   --from-literal=GITHUB_TOKEN=$GITHUB_TOKEN \
   -n agents
 
-# Omneval ingest secret
-kubectl create secret generic omneval-ingest-your-project \
-  --from-literal=api-key=$OMNEVAL_INGEST_KEY \
-  -n agents
-
 # GitHub webhook secret — the same value you configured as the webhook
 # "Secret" in Step 2. Used for HMAC-SHA256 signature verification on every
 # inbound delivery.
@@ -447,17 +468,15 @@ kubectl create secret generic github-webhook-secret \
   -n agents
 ```
 
-Reference the `github-webhook-secret` from the worker via `extraEnv` in your
-Helm values (see 6d) so the webhook receiver enforces signature verification:
+Reference the `github-webhook-secret` from the worker via
+`temporalWorker.githubWebhookSecret` in your Helm values (see 6d) so the
+webhook receiver enforces signature verification:
 
 ```yaml
 temporalWorker:
-  extraEnv:
-    - name: GITHUB_WEBHOOK_SECRET
-      valueFrom:
-        secretKeyRef:
-          name: github-webhook-secret
-          key: secret
+  githubWebhookSecret:
+    name: github-webhook-secret
+    key: secret
 ```
 
 ### 6c: Create the ConfigMap
@@ -492,12 +511,9 @@ temporalWorker:
   ciFixMaxIterations: 5
   executeMaxIterations: 1
   maxQuestionsPerPhase: 3
-  extraEnv:
-    - name: GITHUB_WEBHOOK_SECRET
-      valueFrom:
-        secretKeyRef:
-          name: github-webhook-secret
-          key: secret
+  githubWebhookSecret:
+    name: github-webhook-secret
+    key: secret
 
 agent:
   gitName: "devloop-bot"
@@ -540,7 +556,7 @@ no separate messaging platform is required.
 
 Deploy from the published OCI chart (replace `<VERSION>` with the
 [latest release tag](https://github.com/omneval/devloop/releases), e.g.
-`0.1.0`):
+`0.0.21`):
 
 ```bash
 helm install devloop oci://ghcr.io/omneval/charts/devloop \
@@ -646,7 +662,7 @@ Project Registry. Because the old run is in a terminal state (Failed or Complete
 | `default_branch`      | Yes      | string | Default branch for PRs                           |
 | `agent_image`         | No       | string | Container image for the project agent (defaults to the published `devloop-agent-universal` via `temporalWorker.agentJob.defaultImage`) |
 | `agent_label`         | Yes      | string | GitHub issue label to trigger Dev Loop           |
-| `omneval_ingest_secret` | Yes    | string | K8s secret name for Omneval ingest API key       |
+| `omneval_ingest_secret` | No     | string | K8s secret name for Omneval ingest API key. Omit if you don't run an omneval/omneval ingest instance — KPI span emission is then skipped (best-effort, never blocks the Dev Loop) |
 | `github_token_secret` | Yes      | string | K8s secret name for the devloop-bot GitHub token (also used for posting issue comments). Used as the auth fallback when GitHub App auth (`githubApp.*` / `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`) is not configured — see [GitHub App Setup](github-app.md) |
 | `pr_reviewer`         | No       | string | GitHub login requested as reviewer after CI Fix Loop and Review phases complete |
 | `agent_runner`        | No       | string | Agent harness for this project's jobs: `openhands` (default) or `claude-agent-sdk`. Overrides the deployment-wide `temporalWorker.agentJob.runner` Helm value — see [ADR-0011](adr/0011-pluggable-agent-runner.md) |
@@ -661,7 +677,7 @@ Project Registry. Because the old run is in a terminal state (Failed or Complete
 | `GITHUB_APP_ID` / `githubApp.appId` | **Recommended** — GitHub App ID; together with `GITHUB_APP_PRIVATE_KEY` switches devloop-bot to GitHub App authentication (short-lived installation tokens) instead of a PAT. See [GitHub App Setup](github-app.md) |
 | `GITHUB_APP_PRIVATE_KEY` / `githubApp.privateKeySecret` | RSA private key for the GitHub App, sourced from a K8s Secret (`{name, key}`) and forwarded via `secretKeyRef`. Used to sign the JWTs devloop exchanges for installation access tokens |
 | `GITHUB_APP_INSTALLATION_ID` / `githubApp.installationId` | Selects which installation of the GitHub App devloop mints installation tokens for |
-| `GITHUB_WEBHOOK_SECRET`          | HMAC secret for verifying GitHub webhook payload signatures (set on the temporal-worker pod via `extraEnv` + the `github-webhook-secret` Secret — strongly recommended) |
+| `GITHUB_WEBHOOK_SECRET` / `temporalWorker.githubWebhookSecret` | HMAC secret for verifying GitHub webhook payload signatures, sourced from a K8s Secret (`{name, key}`) and forwarded via `secretKeyRef`. Strongly recommended — without it the webhook receiver accepts unsigned deliveries |
 | `temporalWorker.agentGithubLogin`| GitHub login of the devloop-bot account (default `devloop-bot`). Forwarded as `AGENT_GITHUB_LOGIN`; the webhook receiver uses it to filter out the bot's own comments/reviews so they don't re-trigger workflows |
 | `temporalWorker.maxConcurrentJobs` | Maximum number of Agent Execution Job dispatches (and LLM-bearing activities) that may run concurrently across all workflow types and projects. Forwarded as `MAX_CONCURRENT_JOBS`. Default `1` |
 | `temporalWorker.ciFixMaxIterations` | Maximum number of `Phase.CI_FIX` retry attempts the CI Fix Loop spends trying to turn a PR's failing CI checks green before handing it to the human reviewer with a "CI still failing" note. Default `5` |

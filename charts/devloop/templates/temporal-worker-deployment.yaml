@@ -68,6 +68,13 @@ spec:
               value: {{ .Values.temporalWorker.maxConcurrentJobs | default 1 | quote }}
             - name: AGENT_GITHUB_LOGIN
               value: {{ .Values.temporalWorker.agentGithubLogin | default "devloop-bot" | quote }}
+            {{- if .Values.temporalWorker.githubWebhookSecret.name }}
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.temporalWorker.githubWebhookSecret.name }}
+                  key: {{ .Values.temporalWorker.githubWebhookSecret.key }}
+            {{- end }}
             {{- with .Values.githubApp.appId }}
             - name: GITHUB_APP_ID
               value: {{ . | quote }}

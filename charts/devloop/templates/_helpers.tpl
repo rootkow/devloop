@@ -12,21 +12,14 @@ Temporal subchart is not enabled (issue #117).
 Effective Temporal frontend address. An explicit `temporalHost` always wins;
 otherwise, when the bundled Temporal subchart is enabled, default to its
 frontend Service. The subchart names that Service `<fullname>-frontend`, where
-<fullname> follows the standard Helm convention: `temporal.fullnameOverride`
-if set, the bare release name if it already contains "temporal", else
-`<release>-temporal`.
+<fullname> is `temporal.fullnameOverride` (defaulted to "temporal" in
+values.yaml).
 */}}
 {{- define "devloop.temporalHost" -}}
 {{- if .Values.temporalHost -}}
 {{- .Values.temporalHost -}}
 {{- else if .Values.temporal.enabled -}}
-{{- $fullname := printf "%s-temporal" .Release.Name -}}
-{{- if .Values.temporal.fullnameOverride -}}
-{{- $fullname = .Values.temporal.fullnameOverride -}}
-{{- else if contains "temporal" .Release.Name -}}
-{{- $fullname = .Release.Name -}}
-{{- end -}}
-{{- printf "%s-frontend.%s.svc.cluster.local:7233" $fullname .Release.Namespace -}}
+{{- printf "%s-frontend.%s.svc.cluster.local:7233" (.Values.temporal.fullnameOverride | default "temporal") .Release.Namespace -}}
 {{- end -}}
 {{- end -}}
 
