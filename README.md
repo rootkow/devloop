@@ -74,6 +74,7 @@ There are two ways to run devloop, depending on what you're trying to do:
 ### Local Quickstart (Docker Compose)
 
 ```bash
+gh extension install cli/gh-webhook # install the github webhook cli extension
 git clone https://github.com/omneval/devloop.git
 cd devloop
 docker compose up -d                 # Temporal server + Web UI on :8233
