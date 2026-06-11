@@ -14,7 +14,7 @@ real draft PR — all from localhost.
 | Tool | Install |
 |------|---------|
 | **Docker + Docker Compose** | https://docs.docker.com/get-docker/ |
-| **GitHub CLI** | `brew install gh` / `sudo apt install gh` — then `gh auth login` and `gh extension install cli/gh-webhook` (the extension provides `gh webhook forward`, used in Step 2) |
+| **GitHub CLI** | `brew install gh` / `sudo apt install gh` — then `gh auth login` and `gh extension install cli/gh-webhook` (the extension provides `gh webhook forward`, used in Step 4) |
 | **Python + uv** | `curl -LsSf https://astral.sh/uv/install.sh | sh` |
 | **devloop source** | `git clone https://github.com/omneval/devloop.git && cd devloop` |
 
@@ -46,28 +46,7 @@ docker compose ps
 # All three services should be "running"
 ```
 
-## Step 2 — Forward GitHub Webhooks Locally
-
-`gh webhook forward` (from the `cli/gh-webhook` extension — see Prerequisites)
-bridges real GitHub webhook deliveries to localhost without any tunnel or
-public hostname, creating the repository webhook for you:
-
-```bash
-gh webhook forward \
-  --repo=OWNER/REPO \
-  --events=issues,issue_comment,pull_request_review \
-  --url=http://localhost:8088/webhook/github
-```
-
-Replace `OWNER/REPO` with your target repository. Keep this running in a
-separate terminal — it stays connected to GitHub until you stop it with
-`Ctrl+C`.
-
-**Why this works**: GitHub sends webhook events directly to the `gh` CLI's
-local tunnel, which relays them to `http://localhost:8088/webhook/github`.
-No DNS, no TLS, no firewall changes.
-
-## Step 3 — Configure the Worker
+## Step 2 — Configure the Worker
 
 Create a minimal project registry. The worker reads this file at startup to
 know which repos to monitor:
@@ -89,23 +68,31 @@ EOF
 > required by the schema but can be empty strings for local evaluation. When
 > `github_token_secret` is empty, the worker resolves GitHub credentials from
 > its own `GITHUB_TOKEN` environment variable (exported from `gh auth token`
-> in Step 4) instead of reading a Kubernetes Secret.
+> in Step 3) instead of reading a Kubernetes Secret.
 
-## Step 4 — Run the Worker Locally
+## Step 3 — Run the Worker Locally
 
 Start the Temporal worker in the devloop source directory. Set `JOB_RUNNER=docker`
-so that agent jobs execute via `docker run` instead of Kubernetes Jobs:
+so that agent jobs execute via `docker run` instead of Kubernetes Jobs.
+
+Get a GitHub token to forward into the worker:
 
 ```bash
-export JOB_RUNNER=docker
-export TEMPORAL_HOST=localhost:7233
-export PROJECTS_FILE=agents/projects.yaml
-export GITHUB_TOKEN=$(gh auth token)
-export AGENT_MODEL=gpt-4o
-export AGENT_LLM_API_KEY="your-api-key-here"
+gh auth token
+```
 
+Store the worker's configuration in `agents/.env`, pasting the token from
+above in place of `<TOKEN>`:
+
+```bash
+cp agents/.env.example agents/.env
+```
+
+Then start the worker, loading that file:
+
+```bash
 uv sync --all-groups
-uv run python -m devloop.worker
+uv run --env-file agents/.env python -m devloop.worker
 ```
 
 The worker reads its configuration from environment variables (there are no
@@ -113,6 +100,28 @@ CLI flags): `TEMPORAL_HOST` for the Temporal frontend, `PROJECTS_FILE` for the
 registry path. It starts the Temporal worker process, listens on `:8088` for
 webhook events, and registers activities including `dispatch_agent_job`
 (which delegates to Docker when `JOB_RUNNER=docker`).
+
+## Step 4 — Forward GitHub Webhooks Locally
+
+`gh webhook forward` (from the `cli/gh-webhook` extension — see Prerequisites)
+bridges real GitHub webhook deliveries to localhost without any tunnel or
+public hostname, creating the repository webhook for you:
+
+```bash
+gh webhook forward \
+  --repo=OWNER/REPO \
+  --events=issues,issue_comment,pull_request_review \
+  --url=http://localhost:8088/webhook/github
+  --secret=abc123
+```
+
+Replace `OWNER/REPO` with your target repository. Keep this running in a
+separate terminal — it stays connected to GitHub until you stop it with
+`Ctrl+C`.
+
+**Why this works**: GitHub sends webhook events directly to the `gh` CLI's
+local tunnel, which relays them to `http://localhost:8088/webhook/github`.
+No DNS, no TLS, no firewall changes.
 
 ## Step 5 — Trigger the Dev Loop
 
@@ -191,6 +200,16 @@ running (`docker compose ps`) and `TEMPORAL_HOST` is set correctly.
 **Webhook events not arriving**: Check that `gh webhook forward` is connected
 (`gh webhook forward` shows delivery logs). Verify the repo webhook
 configuration matches the forwarded events.
+
+**`gh webhook forward` fails with "Hook already exists on this repository"**:
+A previous `gh webhook forward` session was likely killed before it could
+clean up its webhook, leaving a stale (inactive) hook behind. List and remove
+it, then retry:
+
+```bash
+gh api repos/OWNER/REPO/hooks
+gh api -X DELETE repos/OWNER/REPO/hooks/<HOOK_ID>
+```
 
 **Docker runs fail with "image not found"**: The worker resolves the agent
 image from the project registry's `agent_image` field, falling back to

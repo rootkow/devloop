@@ -75,9 +75,10 @@ async def test_docker_dispatch_runs_container_and_returns_result():
     captured_output_path = []
 
     def fake_run_container(image, env, output_path, bind_host_path, timeout=None):
-        """Simulate container execution: write result to output file."""
+        """Simulate container execution: write result to the bind-mounted
+        host file (as the real container would write through the mount)."""
         captured_output_path.append(output_path)
-        with open(output_path, "w") as f:
+        with open(bind_host_path, "w") as f:
             json.dump(result_payload, f)
         return 0
 
@@ -221,7 +222,7 @@ async def test_docker_dispatch_passes_awaiting_human():
     }
 
     def fake_run(*args, **kwargs):
-        with open(args[2], "w") as f:
+        with open(args[3], "w") as f:
             json.dump(result_payload, f)
         return 0
 
@@ -250,7 +251,7 @@ async def test_dispatch_agent_job_routes_to_docker_when_env_set():
     }
 
     def fake_run(*args, **kwargs):
-        with open(args[2], "w") as f:
+        with open(args[3], "w") as f:
             json.dump(result_payload, f)
         return 0
 
