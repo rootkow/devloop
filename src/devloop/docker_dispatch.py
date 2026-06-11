@@ -28,6 +28,10 @@ from .projects import get_project
 
 log = logging.getLogger(__name__)
 
+# Path inside the container where the agent writes its result JSON. This must
+# be a Linux-style path regardless of host OS, since the agent image is Linux.
+_CONTAINER_OUTPUT_PATH = "/tmp/devloop-agent-output.json"
+
 AGENT_BASE_IMAGE = os.getenv(
     "AGENT_BASE_IMAGE", "ghcr.io/omneval/devloop-agent-base:latest"
 )
@@ -128,7 +132,12 @@ def _run_container(
     bind_host_path: str,
     timeout: float | None = None,
 ) -> int:
-    """Run a docker container and return the exit code."""
+    """Run a docker container and return the exit code.
+
+    ``output_path`` is the path *inside* the container (must be a Linux-style
+    path, e.g. ``/tmp/...``); ``bind_host_path`` is the corresponding file on
+    the host that gets bind-mounted to it.
+    """
     import docker
 
     client = docker.from_env()
@@ -191,14 +200,14 @@ async def dispatch_agent_job_docker(d: DispatchInput) -> AgentJobResult:
     image = _resolve_image(d)
     env = _build_env(d)
 
-    # Create a temporary file for the output (host side)
-    # The container writes to OUTPUT_FILE; we mount it at the same path.
+    # Create a temporary file for the output (host side); bind-mounted into
+    # the container at _CONTAINER_OUTPUT_PATH, where the agent writes OUTPUT_FILE.
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
         output_path = tmp.name
 
     try:
         exit_code = await asyncio.to_thread(
-            _run_container, image, env, output_path, output_path
+            _run_container, image, env, _CONTAINER_OUTPUT_PATH, output_path
         )
 
         if exit_code != 0:
