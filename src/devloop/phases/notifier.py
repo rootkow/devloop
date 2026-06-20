@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Optional
 
+from ..phases.phase_ops import PhaseOps
+
 
 # Type aliases for injectable callbacks.
 _RequestReviewerCallback = Callable[[str, Optional[int]], Coroutine[Any, Any, Any]]
@@ -67,11 +69,16 @@ class Notifier:
             Injected callbacks for testing.
         """
         cb = callbacks or _Callbacks.default()
-        issue_no = _as_int(issue.get("id"))
+        ops = PhaseOps()
+        issue_no = ops.as_int(issue.get("id"))
         pr_url = exec_result.get("pr_url", "")
-        pr_number = _pr_number_from_url(pr_url)
+        pr_number = ops.pr_number_from_url(pr_url)
 
-        reviewer_result = await self._request_reviewer(inp.project_id, pr_number, cb)
+        reviewer_result = await ops.request_reviewer(
+            inp.project_id,
+            pr_number,
+            callback=cb.request_reviewer,  # type: ignore[arg-type]
+        )
         if reviewer_result.requested:
             reviewer_note = "Reviewer has been tagged."
         elif reviewer_result.reason:
@@ -85,46 +92,12 @@ class Notifier:
             if exec_result.get("exhausted")
             else ""
         )
-        await self._post_comment(
+        await ops.comment(
             inp.project_id,
             issue_no,
             f"👀 Ready for review — PR: {pr_url}. {reviewer_note}{note}",
-            cb,
+            callback=cb.post_comment,
         )
-
-    async def _request_reviewer(
-        self, project_id: str, pr_number: Optional[int], cb: _Callbacks
-    ) -> Any:
-        """Request a GitHub PR reviewer (or use injected callback)."""
-        if cb.request_reviewer is not None:
-            return await cb.request_reviewer(project_id, pr_number)
-        return None
-
-    async def _post_comment(
-        self, project_id: str, issue_number: int, body: str, cb: _Callbacks
-    ) -> None:
-        """Post a GitHub Issue/PR comment."""
-        if cb.post_comment is not None:
-            await cb.post_comment(project_id, issue_number, body)
-            return
-
-
-def _pr_number_from_url(pr_url: str) -> Optional[int]:
-    """Extract the PR number from a GitHub PR URL."""
-    if not pr_url:
-        return None
-    parts = pr_url.rstrip("/").split("/")
-    try:
-        return int(parts[-1])
-    except (ValueError, IndexError):
-        return None
-
-
-def _as_int(value: Any) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
 
 
 # Re-export for convenience.
