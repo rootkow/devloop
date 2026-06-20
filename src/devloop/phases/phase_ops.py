@@ -15,7 +15,6 @@ When the callback is ``None``, the default Temporal activity path is used.
 
 from __future__ import annotations
 
-import logging
 import re
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Optional
@@ -33,8 +32,6 @@ from ..shared import (
     RequestReviewerInput,
     ReviewerRequestResult,
 )
-
-log = logging.getLogger(__name__)
 
 
 class PhaseOps:
