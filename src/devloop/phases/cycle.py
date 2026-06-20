@@ -18,11 +18,11 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from ..dev_loop_logic import pr_number_from_url
+from ..phases.phase_ops import PhaseOps
 from ..shared import (
     AgentJobResult,
     CIChecksResult,
     DispatchInput,
-    GithubNotificationInput,
     JOB_DISPATCH_QUEUE,
     Phase,
     PollCIChecksInput,
@@ -108,6 +108,7 @@ class CICycle:
             going green.
         """
         cb = callbacks or _Callbacks.default()
+        ops = PhaseOps()
         pr_number = pr_number_from_url(exec_result.get("pr_url", ""))
         if pr_number <= 0:
             return CICycleResult(exhausted=False, commits=0)
@@ -154,11 +155,11 @@ class CICycle:
                 "extra": {"ci_check_failures": failures},
             }
 
-            await self._post_comment(
+            await ops.comment(
                 project_id,
                 pr_number,
                 f"⏳ queued — CI fix attempt {attempt}/{max_iters}",
-                cb,
+                callback=cb.post_comment,
             )
 
             commits = await self._dispatch_fix(
@@ -166,20 +167,21 @@ class CICycle:
             )
             total_commits += commits
 
-            if cb.post_comment:
-                if commits > 0:
-                    await cb.post_comment(
-                        project_id,
-                        pr_number,
-                        f"🔧 CI fix attempt {attempt}/{max_iters} — "
-                        f"pushed {commits} commit(s)",
-                    )
-                else:
-                    await cb.post_comment(
-                        project_id,
-                        pr_number,
-                        f"❌ CI fix attempt {attempt}/{max_iters} failed",
-                    )
+            if commits > 0:
+                await ops.comment(
+                    project_id,
+                    pr_number,
+                    f"🔧 CI fix attempt {attempt}/{max_iters} — "
+                    f"pushed {commits} commit(s)",
+                    callback=cb.post_comment,
+                )
+            else:
+                await ops.comment(
+                    project_id,
+                    pr_number,
+                    f"❌ CI fix attempt {attempt}/{max_iters} failed",
+                    callback=cb.post_comment,
+                )
 
         # Re-check before declaring exhaustion.
         final_checks = await self._poll(project_id, pr_number, cb)
@@ -202,24 +204,6 @@ class CICycle:
             PollCIChecksInput(project_id=project_id, pr_number=pr_number),
             result_type=CIChecksResult,
             start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=RetryPolicy(maximum_attempts=3),
-        )
-
-    async def _post_comment(
-        self, project_id: str, issue_number: int, body: str, cb: _Callbacks
-    ) -> None:
-        """Post a GitHub Issue/PR comment."""
-        if cb.post_comment is not None:
-            await cb.post_comment(project_id, issue_number, body)
-            return
-        await workflow.execute_activity(
-            "post_github_comment",
-            GithubNotificationInput(
-                issue_number=issue_number,
-                project_id=project_id,
-                body=body,
-            ),
-            start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
@@ -253,22 +237,6 @@ class CICycle:
             retry_policy=RetryPolicy(maximum_attempts=3),
             task_queue=JOB_DISPATCH_QUEUE,
         )
-        await self._cleanup(result.job_name, cb)
+        ops = PhaseOps()
+        await ops.cleanup(result.job_name, callback=cb.cleanup)
         return result.commits
-
-    async def _cleanup(self, job_name: str, cb: _Callbacks) -> None:
-        """Delete the output ConfigMap for a completed job — fire-and-forget."""
-        if cb.cleanup is not None:
-            await cb.cleanup(job_name)
-            return
-        if not job_name:
-            return
-        try:
-            await workflow.execute_activity(
-                "cleanup_configmap",
-                job_name,
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=RetryPolicy(maximum_attempts=1),
-            )
-        except Exception:  # noqa: BLE001
-            workflow.logger.warning("cleanup_configmap failed for %s", job_name)
