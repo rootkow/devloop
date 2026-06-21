@@ -38,6 +38,7 @@ jobs:
   test:
     name: Test SDK
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -53,7 +54,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups
 
+      # TEMPORAL_TEST_SERVER_DOWNLOAD=false (set in conftest.py) prevents the
+      # Rust SDK from downloading the test-server binary from dl.temporal.io,
+      # which hangs on first-run CI runners (issue #204).  The SDK ships an
+      # embedded dev server that works with no network access.
       - name: Test
+        env:
+          TEMPORAL_TEST_SERVER_DOWNLOAD: false
         run: uv run pytest tests
 
   agent-base-test:
