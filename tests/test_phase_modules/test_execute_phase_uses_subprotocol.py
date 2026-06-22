@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -48,9 +48,7 @@ class TestExecutePhaseUsesExecuteOpsSubProtocol:
             ci_fix_max_iterations=3,
         )
 
-        with patch("devloop.phases.execute.workflow") as mock_workflow:
-            mock_workflow.execute_activity = AsyncMock()
-            _ = await phase.run(inp=inp, issue={"id": "42"}, callbacks=callbacks)
+        _ = await phase.run(inp=inp, issue={"id": "42"}, callbacks=callbacks)
 
         # execute_ops.kpi_bump must have been called — this verifies the
         # phase accesses kpi_bump through the execute_ops sub-protocol.
@@ -81,9 +79,7 @@ class TestExecutePhaseUsesExecuteOpsSubProtocol:
             ci_fix_max_iterations=3,
         )
 
-        with patch("devloop.phases.execute.workflow") as mock_workflow:
-            mock_workflow.execute_activity = AsyncMock()
-            _ = await phase.run(inp=inp, issue={"id": "42"}, callbacks=callbacks)
+        _ = await phase.run(inp=inp, issue={"id": "42"}, callbacks=callbacks)
 
         # execute_ops.comment must have been called — this verifies the
         # phase accesses comment through the execute_ops sub-protocol.
@@ -120,9 +116,7 @@ class TestExecutePhaseUsesExecuteOpsSubProtocol:
             ci_fix_max_iterations=3,
         )
 
-        with patch("devloop.phases.execute.workflow") as mock_workflow:
-            mock_workflow.execute_activity = AsyncMock()
-            _ = await phase.run(inp=inp, issue={"id": "42"}, callbacks=callbacks)
+        _ = await phase.run(inp=inp, issue={"id": "42"}, callbacks=callbacks)
 
         # execute_ops.dispatch_execute must have been called.
         assert callbacks.execute_ops.dispatch_execute is not None
@@ -155,9 +149,7 @@ class TestExecutePhaseUsesExecuteOpsSubProtocol:
             ci_fix_max_iterations=3,
         )
 
-        with patch("devloop.phases.execute.workflow") as mock_workflow:
-            mock_workflow.execute_activity = AsyncMock()
-            _ = await phase.run(inp=inp, issue={"id": "42"}, callbacks=callbacks)
+        _ = await phase.run(inp=inp, issue={"id": "42"}, callbacks=callbacks)
 
         # PhaseOps.comment should have been called as fallback.
         callbacks.comment.assert_awaited()
