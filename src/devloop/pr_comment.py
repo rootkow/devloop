@@ -7,7 +7,6 @@ from typing import Any, Optional
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-
 from .execution import (
     AgentJobResult,
     DispatchInput,
@@ -97,8 +96,8 @@ class PRCommentWorkflow(PhaseOps):
 
     Thin adapter — composes PRCommentPhase, CICycle, and Notifier as
     deep phases with injectable callbacks.  All orchestration lives in
-    ``run``; the body wires phase instances, binds PhaseOps callback
-    methods, and delegates each phase's ``run()``.
+    ``run``; the body wires phase instances, binds its own ``PhaseOps``
+    methods as callbacks, and delegates each phase's ``run()``.
 
     The 5 phases are wired with injectable callbacks consistent with the
     PhaseOps pattern (issues #187/#188):
@@ -111,10 +110,17 @@ class PRCommentWorkflow(PhaseOps):
     """
 
     def __init__(self) -> None:
-        # PhaseOps adapters (use local ``workflow`` from this module) --------- #
-        self.comment = self._comment_activity
-        self.dispatch = self._dispatch_activity
-        self.request_reviewer = self._request_reviewer_activity
+        # Wire every PhaseOps callback field to a Temporal activity adapter.
+        PhaseOps.__init__(
+            self,
+            comment=self._comment_activity,
+            cleanup=self._cleanup_activity,
+            dispatch=self._dispatch_activity,
+            kpi_bump=self._kpi_bump_activity,
+            kpi_take=self._kpi_take_activity,
+            emit_kpis=self._emit_kpis_activity,
+            request_reviewer=self._request_reviewer_activity,
+        )
         # Lazy-init: phase instances are workflow state and must survive replay.
         self._pr_comment_phase_instance: Optional[PRCommentPhase] = None
         self._cycle_instance: Optional[CICycle] = None
@@ -247,6 +253,61 @@ class PRCommentWorkflow(PhaseOps):
             result_type=ReviewerRequestResult,
             start_to_close_timeout=timedelta(seconds=60),
             retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+
+    async def _cleanup_activity(self, job_name: str) -> None:
+        """Real ``cleanup_configmap`` activity — adapter for PhaseOps.cleanup.
+
+        Called from within PhaseOps._cleanup when ``self.cleanup`` callback is
+        set (which it is, in ``__init__``).
+        """
+        if not job_name:
+            return
+        try:
+            await workflow.execute_activity(
+                "cleanup_configmap",
+                job_name,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+        except Exception:  # noqa: BLE001
+            workflow.logger.warning("cleanup_configmap failed for %s", job_name)
+
+    # ---- KPI counter methods (local state, not I/O) ----------------------- #
+
+    def _kpi_bump(self, key: str, n: int = 1) -> None:
+        """Increment a per-issue KPI counter."""
+        counters = getattr(self, "_kpi_counters", None)
+        if counters is None:
+            counters = {}
+            self._kpi_counters = counters
+        counters[key] = counters.get(key, 0) + n
+
+    def _kpi_take(self) -> dict:
+        """Return and reset the accumulated counters (one issue's worth)."""
+        counters = getattr(self, "_kpi_counters", None) or {}
+        self._kpi_counters = {}
+        return counters
+
+    async def _kpi_bump_activity(self, key: str, val: int) -> None:
+        """Real KPI bump — adapter for PhaseOps.kpi_bump."""
+        return self._kpi_bump(key, val)
+
+    async def _kpi_take_activity(self) -> dict:
+        """Real KPI take — adapter for PhaseOps.kpi_take."""
+        return self._kpi_take()
+
+    async def _emit_kpis_activity(self, inp: WorkflowKpiInput) -> None:
+        """Real ``emit_workflow_kpis`` activity — adapter for PhaseOps.emit_kpis.
+
+        Calls ``workflow.execute_activity`` directly to avoid infinite recursion
+        through the PhaseOps delegation layer.
+        """
+        return await workflow.execute_activity(
+            "emit_workflow_kpis",
+            inp,
+            start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=RetryPolicy(maximum_attempts=1),
         )
 
     @workflow.run

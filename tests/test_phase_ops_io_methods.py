@@ -256,6 +256,13 @@ class TestPRCommentWorkflowExercisesPhaseOps:
 
         assert issubclass(PRCommentWorkflow, PhaseOps)
 
+    def test_pr_comment_workflow_not_subclass_of_workflow_common(self) -> None:
+        """PRCommentWorkflow must NOT inherit from _WorkflowCommon."""
+        from devloop.pr_comment import PRCommentWorkflow
+
+        # _WorkflowCommon was removed; verify via MRO that it's not present.
+        assert "_WorkflowCommon" not in [c.__name__ for c in PRCommentWorkflow.__mro__]
+
     def test_pr_comment_workflow_has_phaseops_io_methods(self) -> None:
         """PRCommentWorkflow must have all 5 I/O methods."""
         from devloop.pr_comment import PRCommentWorkflow
@@ -290,3 +297,101 @@ class TestPRCommentWorkflowExercisesPhaseOps:
         await wf._comment("test-project", 42, "Hello")
 
         assert call_log == [("test-project", 42, "Hello")]
+
+    @pytest.mark.asyncio
+    async def test_pr_comment_workflow_cleanup_delegates_to_phaseops(self) -> None:
+        """When PRCommentWorkflow._cleanup is called with self.cleanup set,
+        it goes through PhaseOps._cleanup (callback-first path)."""
+        from devloop.pr_comment import PRCommentWorkflow
+
+        wf = PRCommentWorkflow()
+
+        call_log: list = []
+
+        async def mock_cleanup(job_name: str) -> None:
+            call_log.append(job_name)
+
+        wf.cleanup = mock_cleanup
+        await wf._cleanup("my-job-123")
+
+        assert call_log == ["my-job-123"]
+
+    @pytest.mark.asyncio
+    async def test_pr_comment_workflow_dispatch_delegates_to_phaseops(self) -> None:
+        """When PRCommentWorkflow._dispatch is called with self.dispatch set,
+        it goes through PhaseOps._dispatch (callback-first path)."""
+        from devloop.execution import AgentJobResult, TaskSpec
+        from devloop.pr_comment import PRCommentWorkflow
+        from devloop.shared import JobStatus
+
+        wf = PRCommentWorkflow()
+
+        call_log: list = []
+
+        async def mock_dispatch(
+            project_id: str,
+            spec: TaskSpec,
+            issue_number: int,
+            poll_interval_seconds: float,
+        ) -> AgentJobResult:
+            call_log.append((project_id, spec, issue_number, poll_interval_seconds))
+            return AgentJobResult(
+                status=JobStatus.COMPLETE.value, job_name="dispatched-job"
+            )
+
+        wf.dispatch = mock_dispatch
+        spec = TaskSpec(phase="test", project_id="p", issue_number=1)
+        result = await wf._dispatch(
+            "p", spec, issue_number=1, poll_interval_seconds=5.0
+        )
+
+        assert len(call_log) == 1
+        assert call_log[0][0] == "p"
+        assert result.status == JobStatus.COMPLETE.value
+
+    @pytest.mark.asyncio
+    async def test_pr_comment_workflow_request_reviewer_delegates_to_phaseops(
+        self,
+    ) -> None:
+        """When PRCommentWorkflow._request_reviewer is called with
+        self.request_reviewer set, it goes through PhaseOps._request_reviewer
+        (callback-first path)."""
+        from devloop.github import ReviewerRequestResult
+        from devloop.pr_comment import PRCommentWorkflow
+
+        wf = PRCommentWorkflow()
+
+        call_log: list = []
+
+        async def mock_request_reviewer(
+            project_id: str, pr_number: int | None
+        ) -> ReviewerRequestResult:
+            call_log.append((project_id, pr_number))
+            return ReviewerRequestResult(requested=True)
+
+        wf.request_reviewer = mock_request_reviewer
+        result = await wf._request_reviewer("test-project", 42)
+
+        assert call_log == [("test-project", 42)]
+        assert result.requested is True
+
+    @pytest.mark.asyncio
+    async def test_pr_comment_workflow_emit_kpis_delegates_to_phaseops(self) -> None:
+        """When PRCommentWorkflow._emit_kpis is called with self.emit_kpis set,
+        it goes through PhaseOps._emit_kpis (callback-first path)."""
+        from devloop.execution import WorkflowKpiInput
+        from devloop.pr_comment import PRCommentWorkflow
+
+        wf = PRCommentWorkflow()
+
+        call_log: list = []
+
+        async def mock_emit_kpis(inp: WorkflowKpiInput) -> None:
+            call_log.append(inp)
+
+        wf.emit_kpis = mock_emit_kpis
+        inp = WorkflowKpiInput(project_id="p", issue_number=42, ci_fix_iterations=0)
+        await wf._emit_kpis(inp)
+
+        assert len(call_log) == 1
+        assert call_log[0].issue_number == 42
