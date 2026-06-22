@@ -25,7 +25,7 @@ from .phases.pr_comment import (
     PRCommentPhase,
     PRCommentPhaseCallbacks as _PhaseCallbacks,
 )
-from ._constants import JOB_DISPATCH_QUEUE
+from ._constants import JOB_DISPATCH_QUEUE, _ACTIVITY_TIMEOUT
 
 
 @dataclass
@@ -230,7 +230,7 @@ class PRCommentWorkflow(PhaseOps):
                 poll_interval_seconds=poll_interval_seconds,
             ),
             result_type=AgentJobResult,
-            start_to_close_timeout=timedelta(minutes=5),
+            start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=RetryPolicy(maximum_attempts=3),
             task_queue=JOB_DISPATCH_QUEUE,
         )
