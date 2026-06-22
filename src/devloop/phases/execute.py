@@ -9,18 +9,8 @@ and delegates to ``CICycle`` for the CI fix loop.
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Any, Callable, Coroutine, Optional
 
-from temporalio import workflow
-from temporalio.common import RetryPolicy
-
-from .._constants import (
-    _GITHUB_COMMENT_TIMEOUT,
-    _RETRY,
-    JOB_DISPATCH_QUEUE,
-)
-from ..github import GithubNotificationInput
 from ..phases.cycle import CICycle
 from ..phases.execute_phase_ops import ExecutePhaseOps
 from ..phases.phase_ops import PhaseOps
@@ -230,34 +220,6 @@ class ExecutePhase:
         exec_result["exhausted"] = cycle_result.exhausted
         return exec_result
 
-    async def _dispatch_execute(
-        self,
-        project_id: str,
-        spec: TaskSpec,
-        issue_number: int,
-        poll_interval_seconds: float,
-        cb: PhaseOps,
-    ) -> AgentJobResult:
-        """Dispatch the execute agent job (or use injected callback)."""
-        exec_ops = cb.execute_ops
-        if exec_ops.dispatch_execute is not None:
-            result = await exec_ops.dispatch_execute(
-                project_id, spec, issue_number, poll_interval_seconds
-            )
-        else:
-            ops = PhaseOps()
-            result = await ops.dispatch_helper(
-                project_id,
-                spec,
-                issue_number,
-                poll_interval_seconds,
-                dispatch_callback=exec_ops.dispatch_execute,
-                task_queue=JOB_DISPATCH_QUEUE,
-            )
-        if result.status != JobStatus.AWAITING_HUMAN.value:
-            await self._cleanup(result.job_name, cb, exec_ops)
-        return result
-
     async def _answer_questions(
         self,
         project_id: str,
@@ -280,41 +242,6 @@ class ExecutePhase:
             return await ops.answer_question(project_id, issue_no, result)
         # Default: no question resolution — return result as-is.
         return result
-
-    async def _comment(
-        self, project_id: str, issue_number: int, body: str, cb: PhaseOps
-    ) -> None:
-        """Post a GitHub Issue/PR comment."""
-        exec_ops = cb.execute_ops
-        if exec_ops.comment is not None:
-            await exec_ops.comment(project_id, issue_number, body)
-            return
-        await workflow.execute_activity(
-            "post_github_comment",
-            GithubNotificationInput(
-                issue_number=issue_number,
-                project_id=project_id,
-                body=body,
-            ),
-            start_to_close_timeout=_GITHUB_COMMENT_TIMEOUT,
-            retry_policy=_RETRY,
-        )
-
-    async def _cleanup(
-        self, job_name: str, cb: PhaseOps, exec_ops: Optional[ExecutePhaseOps] = None
-    ) -> None:
-        """Delete the output ConfigMap for a completed job."""
-        if not job_name:
-            return
-        try:
-            await workflow.execute_activity(
-                "cleanup_configmap",
-                job_name,
-                start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=RetryPolicy(maximum_attempts=1),
-            )
-        except Exception:  # noqa: BLE001
-            workflow.logger.warning("cleanup_configmap failed for %s", job_name)
 
 
 def _as_int(value: Any) -> int:

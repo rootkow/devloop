@@ -10,11 +10,9 @@ from datetime import timedelta
 from typing import Any, Callable, Coroutine, Optional
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 
-from .._constants import _RETRY, JOB_DISPATCH_QUEUE
+from .._constants import _RETRY
 from ..dev_loop_logic import render_review_findings_comment
-from ..github import GithubNotificationInput
 from ..phases.phase_ops import PhaseOps, _PostCommentCallback
 from ..shared import (
     AgentJobResult,
@@ -124,34 +122,6 @@ class ReviewPhase:
 
         return review or None
 
-    async def _dispatch_review(
-        self,
-        project_id: str,
-        spec: TaskSpec,
-        issue_number: int,
-        poll_interval_seconds: float,
-        cb: PhaseOps,
-    ) -> AgentJobResult:
-        """Dispatch the review agent job."""
-        if cb.dispatch_review is not None:
-            result = await cb.dispatch_review(
-                project_id, spec, issue_number, poll_interval_seconds
-            )
-        else:
-            ops = PhaseOps()
-            result = await ops.dispatch_helper(
-                project_id,
-                spec,
-                issue_number,
-                poll_interval_seconds,
-                dispatch_callback=cb.dispatch_review,
-                activity_name="dispatch_agent_job",
-                task_queue=JOB_DISPATCH_QUEUE,
-            )
-        if result.status != "awaiting_human":
-            await ops._phase_cleanup(result.job_name)
-        return result
-
     async def _post_review_findings(
         self,
         project_id: str,
@@ -203,24 +173,6 @@ class ReviewPhase:
             PostCommentsInput(project_id, pr_number, summary, inline),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=_RETRY,
-        )
-
-    async def _comment(
-        self, project_id: str, issue_number: int, body: str, cb: PhaseOps
-    ) -> None:
-        """Post a GitHub Issue/PR comment."""
-        if cb.post_comment is not None:
-            await cb.post_comment(project_id, issue_number, body)
-            return
-        await workflow.execute_activity(
-            "post_github_comment",
-            GithubNotificationInput(
-                issue_number=issue_number,
-                project_id=project_id,
-                body=body,
-            ),
-            start_to_close_timeout=timedelta(seconds=30),
-            retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
 
