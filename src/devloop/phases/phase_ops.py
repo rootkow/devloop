@@ -446,7 +446,7 @@ class PhaseOps:
                 poll_interval_seconds=poll_interval_seconds,
             ),
             result_type=AgentJobResult,
-            start_to_close_timeout=timedelta(minutes=5),
+            start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=RetryPolicy(maximum_attempts=3),
             task_queue=task_queue,
         )
@@ -475,7 +475,7 @@ class PhaseOps:
             "poll_ci_checks",
             PollCIChecksInput(project_id=project_id, pr_number=pr_number),
             result_type=CIChecksResult,
-            start_to_close_timeout=timedelta(minutes=5),
+            start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
 

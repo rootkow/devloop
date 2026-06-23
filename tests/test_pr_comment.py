@@ -372,3 +372,69 @@ async def test_pr_comment_workflow_refuses_non_agent_branch(reset_mocks):
     assert any("isn't an agent-owned pr" in n.lower() for n in M.notifications)
     assert "pr_comment" not in M.dispatched_phases
     assert M.reviewer_requests == []
+
+
+# --------------------------------------------------------------------------- #
+# StartToClose timeout correctness (fixes #219)
+# --------------------------------------------------------------------------- #
+
+
+def test_pr_comment_dispatch_timeout_is_not_five_minutes():
+    """Regression test for issue #219: verify via source inspection that
+    ``PRCommentWorkflow._dispatch_activity`` does not use a hardcoded
+    5-minute StartToClose timeout.  The correct behaviour is to use
+    ``_ACTIVITY_TIMEOUT`` (defaults to ~2 hours).
+    """
+    import inspect
+
+    from devloop.pr_comment import PRCommentWorkflow
+
+    source = inspect.getsource(PRCommentWorkflow._dispatch_activity)
+    assert "timedelta(minutes=5)" not in source, (
+        "_dispatch_activity must not use a 5-minute timeout — "
+        "use _ACTIVITY_TIMEOUT instead (issue #219)"
+    )
+    assert "_ACTIVITY_TIMEOUT" in source, (
+        "_dispatch_activity must use _ACTIVITY_TIMEOUT for "
+        "dispatch_agent_job StartToClose timeout (issue #219)"
+    )
+
+
+def test_phase_ops_dispatch_agent_job_timeout_is_not_five_minutes():
+    """Regression test for issue #219: verify via source inspection that
+    ``PhaseOps.dispatch_helper`` does not use a hardcoded
+    5-minute StartToClose timeout for ``dispatch_agent_job``.
+    """
+    import inspect
+
+    from devloop.phases.phase_ops import PhaseOps
+
+    source = inspect.getsource(PhaseOps.dispatch_helper)
+    assert "timedelta(minutes=5)" not in source, (
+        "dispatch_helper must not use a 5-minute timeout — "
+        "use _ACTIVITY_TIMEOUT instead (issue #219)"
+    )
+    assert "_ACTIVITY_TIMEOUT" in source, (
+        "dispatch_helper must use _ACTIVITY_TIMEOUT for "
+        "dispatch_agent_job StartToClose timeout (issue #219)"
+    )
+
+
+def test_plan_dispatch_agent_job_timeout_is_not_five_minutes():
+    """Regression test for issue #219: verify via source inspection that
+    ``PlanPhase.run`` does not use a hardcoded
+    5-minute StartToClose timeout for ``dispatch_agent_job``.
+    """
+    import inspect
+
+    from devloop.phases.plan import PlanPhase
+
+    source = inspect.getsource(PlanPhase.run)
+    assert "timedelta(minutes=5)" not in source, (
+        "PlanPhase.run must not use a 5-minute timeout for "
+        "dispatch_agent_job — use _ACTIVITY_TIMEOUT instead (issue #219)"
+    )
+    assert "_ACTIVITY_TIMEOUT" in source, (
+        "PlanPhase.run must use _ACTIVITY_TIMEOUT for "
+        "dispatch_agent_job StartToClose timeout (issue #219)"
+    )

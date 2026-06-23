@@ -22,7 +22,7 @@ from typing import Any, Callable, Coroutine, Optional
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from .._constants import _RETRY
+from .._constants import _ACTIVITY_TIMEOUT, _RETRY
 from ..shared import (
     AgentJobResult,
     DispatchInput,
@@ -126,7 +126,7 @@ class PlanPhase:
                         poll_interval_seconds=inp.poll_interval_seconds,
                     ),
                     result_type=AgentJobResult,
-                    start_to_close_timeout=timedelta(minutes=5),
+                    start_to_close_timeout=_ACTIVITY_TIMEOUT,
                     retry_policy=RetryPolicy(maximum_attempts=3),
                     task_queue=JOB_DISPATCH_QUEUE,
                 )

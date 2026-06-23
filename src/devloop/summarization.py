@@ -17,7 +17,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 
-from ._constants import _RETRY
+from ._constants import _ACTIVITY_TIMEOUT, _RETRY
 
 with workflow.unsafe.imports_passed_through():
     from .shared import JOB_DISPATCH_QUEUE, ORCHESTRATION_QUEUE, PublishSummaryInput
@@ -76,7 +76,7 @@ class SummarizationWorkflow:
                 summary=result.summary,
                 date=date_str,
             ),
-            start_to_close_timeout=timedelta(minutes=5),
+            start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=_RETRY,
             task_queue=ORCHESTRATION_QUEUE,
         )
